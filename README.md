@@ -1,13 +1,13 @@
 # Usage
 
 ## Node scripts
----
-<br>
-<br>
+
+- ### Proteins:
+  ```
+  python /node_data/protein.py --output_dir output_folder --n_rows_in_file 100000
+  ```
 
 ## Edge scripts
----
-<br>
 
 - ### PPI:
   ```
