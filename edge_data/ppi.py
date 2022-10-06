@@ -78,7 +78,8 @@ class PPI_data:
         
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
         intact_df_unique = intact_df_unique[(intact_df_unique["uniprot_a"].isin(self.swissprots)) & (intact_df_unique["uniprot_b"].isin(self.swissprots))]
-
+        intact_df_unique.reset_index(drop=True, inplace=True)
+        
         intact_output_base = self.export_dataframe(intact_df_unique, "intact")
 
         t2 = time()
@@ -141,7 +142,7 @@ class PPI_data:
         
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
         biogrid_df_unique = biogrid_df_unique[(biogrid_df_unique["uniprot_a"].isin(self.swissprots)) & (biogrid_df_unique["uniprot_b"].isin(self.swissprots))]
-        
+        biogrid_df_unique.reset_index(drop=True, inplace=True)
         
         biogrid_output_base = self.export_dataframe(biogrid_df_unique, "biogrid")
 
@@ -235,6 +236,7 @@ class PPI_data:
 
                 # filter with swissprot ids
                 string_df_unique = string_df_unique[(string_df_unique["uniprot_a"].isin(self.swissprots)) & (string_df_unique["uniprot_b"].isin(self.swissprots))]
+                string_df_unique.reset_index(drop=True, inplace=True)
                 
                 t0_1 = time()
                 string_output = os.path.join(string_output_base, f"crossbar_ppi_data_string_{idx+1}.csv")
