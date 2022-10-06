@@ -73,6 +73,9 @@ class PPI_data:
         intact_df_unique = intact_df_unique[['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']]
         intact_df_unique.columns = ['source', 'uniprot_a', 'uniprot_b', 'intact_pubmed_id', 'intact_score', 'intact_methods', 'intact_interaction_types']
         
+        # assing pubmed ids that contain unassigned to NaN value 
+        intact_df_unique["intact_pubmed_id"].loc[intact_df_unique["intact_pubmed_id"].astype(str).str.contains("unassigned", na=False)] = np.nan
+        
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
         intact_df_unique = intact_df_unique[(intact_df_unique["uniprot_a"].isin(self.swissprots)) & (intact_df_unique["uniprot_b"].isin(self.swissprots))]
 
@@ -131,10 +134,15 @@ class PPI_data:
         biogrid_df_unique["source"] = "BioGRID"
         biogrid_df_unique = biogrid_df_unique[['source', 'uniprot_a', 'uniprot_b', 'partner_a', 'partner_b', 'pmid', 'experimental_system',  'experimental_system_type', 'tax_a', 'tax_b']]
         biogrid_df_unique.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_partner_a', 'biogrid_partner_b', 'biogrid_pubmed_id', 'biogrid_experimental_system', 'biogrid_experimental_system_type', 'biogrid_tax_a', 'biogrid_tax_b']
-
+        
+        # drop rows that contain semicolon (";")
+        biogrid_df_unique.drop(biogrid_df_unique[(biogrid_df_unique["uniprot_a"].str.contains(";")) | (biogrid_df_unique["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
+        biogrid_df_unique.reset_index(drop=True, inplace=True)
+        
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
         biogrid_df_unique = biogrid_df_unique[(biogrid_df_unique["uniprot_a"].isin(self.swissprots)) & (biogrid_df_unique["uniprot_b"].isin(self.swissprots))]
-
+        
+        
         biogrid_output_base = self.export_dataframe(biogrid_df_unique, "biogrid")
 
         t2 = time()
@@ -262,7 +270,104 @@ class PPI_data:
         temp.to_csv(all_output, index=False)
         
         all_output_base = self.export_dataframe(temp, "all_ppi_splitted")
-
+      
+    def merge_mall(self):
+        # select and define fields of intact dataframe
+        intact_refined_df_selected_features = self.final_intact_ints.rename(columns={"intact_methods":"method", "intact_interaction_types":"interaction_type", "intact_pubmed_id":"pubmed_id"})
+        intact_refined_df_selected_features = intact_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method", "interaction_type", "intact_score"])
+        intact_refined_df_selected_features["string_combined_score"] = np.nan
+        intact_refined_df_selected_features["string_physical_combined_score"] = np.nan
+        
+        # select and define fields of biogrid dataframe
+        biogrid_refined_df_selected_features = self.final_biogrid_ints.drop(columns=["biogrid_partner_a", "biogrid_partner_b", "biogrid_experimental_system_type", "biogrid_tax_a", "biogrid_tax_b"])
+        biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.rename(columns={"biogrid_experimental_system":"method", "biogrid_pubmed_id":"pubmed_id"})
+        biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.reindex(columns=["source","uniprot_a","uniprot_b", "pubmed_id", "method"])
+        biogrid_refined_df_selected_features[["interaction_type", "intact_score", "string_combined_score", "string_physical_combined_score"]] = np.nan
+        
+        # select and define fields of string dataframe
+        string_refined_df_selected_features = self.final_string_ints.drop(columns=["string_partner_a","string_partner_b"])
+        string_refined_df_selected_features[["pubmed_id", "method", "interaction_type", "intact_score"]] = np.nan
+        string_refined_df_selected_features = string_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b",
+        "pubmed_id", "method", "interaction_type", "intact_score", "string_combined_score", "string_physical_combined_score"])
+        
+        # merge intact and biogrid
+        intact_plus_biogrid_selected_features_df = pd.merge(intact_refined_df_selected_features, biogrid_refined_df_selected_features,
+                                                   on=["uniprot_a", "uniprot_b"], how="outer")
+        
+        # merge source_x and source_y columns
+        intact_plus_biogrid_selected_features_df["source"] = intact_plus_biogrid_selected_features_df[["source_x", "source_y"]].apply(lambda x: '|'.join(x.dropna()), axis=1)
+        
+        # drop redundant columns
+        intact_plus_biogrid_selected_features_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        # merge pubmed_id_x and pubmed_id_y columns
+        intact_plus_biogrid_selected_features_df["pubmed_id"] = intact_plus_biogrid_selected_features_df[["pubmed_id_x", "pubmed_id_y"]].apply(lambda x: int(x.dropna().tolist()[0]) if len(x.dropna().tolist())>0 else np.nan, axis=1)
+        
+        # drop redundant columns
+        intact_plus_biogrid_selected_features_df.drop(columns=["pubmed_id_x", "pubmed_id_y"], inplace=True)
+        
+        # merge method_x and method_y columns
+        intact_plus_biogrid_selected_features_df["method"] = intact_plus_biogrid_selected_features_df[["method_x", "method_y"]].apply(lambda x: x.dropna().tolist()[0] if len(x.dropna().tolist())>0 else np.nan, axis=1)
+        
+        # drop redundant columns
+        intact_plus_biogrid_selected_features_df.drop(columns=["method_x", "method_y"], inplace=True)
+        intact_plus_biogrid_selected_features_df.drop(columns=["interaction_type_y", "intact_score_y", 
+                                                       "string_combined_score_y", "string_physical_combined_score_y"],
+                                             inplace=True)
+        
+        # rename and reorder columns
+        intact_plus_biogrid_selected_features_df.rename(columns={"interaction_type_x":"interaction_type", "intact_score_x":"intact_score",
+                                                        "string_combined_score_x":"string_combined_score",
+                                                        "string_physical_combined_score_x":"string_physical_combined_score"},
+                                               inplace=True)        
+        intact_plus_biogrid_selected_features_df = intact_plus_biogrid_selected_features_df.reindex(columns=['source', 'uniprot_a', 'uniprot_b', 'pubmed_id', 
+                                                          'method', 'interaction_type', 'intact_score', 
+                                                          'string_combined_score', 'string_physical_combined_score'])
+        
+        
+        # merge intact+biogrid with string
+        all_selected_features_df = pd.merge(intact_plus_biogrid_selected_features_df, string_refined_df_selected_features, on=["uniprot_a", "uniprot_b"], how="outer")
+        
+        # merge source_x and source_y columns
+        all_selected_features_df["source"] = all_selected_features_df[["source_x", "source_y"]].apply(lambda x: '|'.join(x.dropna()), axis=1)
+        
+        # drop redundant columns
+        all_selected_features_df.drop(columns=["source_x", "source_y"], inplace=True)
+        all_selected_features_df.drop(columns=["string_combined_score_x", "string_physical_combined_score_x", "pubmed_id_y",
+                                      "method_y", "interaction_type_y", "intact_score_y"], inplace=True)
+        
+        
+        # rename and reorder columns
+        all_selected_features_df.rename(columns={"interaction_type_x":"interaction_type", "intact_score_x":"intact_score",
+                                        "pubmed_id_x":"pubmed_id", "method_x":"method", 
+                                         "string_combined_score_y":"string_combined_score",
+                                        "string_physical_combined_score_y":"string_physical_combined_score"},
+                                inplace=True)
+        all_selected_features_df = all_selected_features_df.reindex(columns=['source', 'uniprot_a', 'uniprot_b', 'pubmed_id', 
+                                                          'method', 'interaction_type', 'intact_score', 
+                                                          'string_combined_score', 'string_physical_combined_score'])
+        
+        
+        # during the merging of 2 pubmed_id columns, it changes datatype from int to float. So it needs to be reverted
+        def float_to_int(element):
+            if "." in str(element):                
+                dot_index = str(element).index(".")
+                element = str(element)[:dot_index]
+                return element
+            else:
+                return element
+        
+        # first make their datatype as string
+        all_selected_features_df["pubmed_id"] = all_selected_features_df["pubmed_id"].astype(str, errors="ignore")
+        all_selected_features_df["string_physical_combined_score"] = all_selected_features_df["string_physical_combined_score"].astype(str, errors="ignore")
+        
+        # then revert back them
+        all_selected_features_df["pubmed_id"] = all_selected_features_df["pubmed_id"].apply(float_to_int)
+        all_selected_features_df["string_physical_combined_score"] = all_selected_features_df["string_physical_combined_score"].apply(float_to_int)
+        
+        return all_selected_features_df      
+        
+        
 if __name__ == "__main__":
     
     args = parser.parse_args()
@@ -271,6 +376,9 @@ if __name__ == "__main__":
     intact_ints = ppi_downloader.intact_process()
     biogrid_ints =ppi_downloader.biogrid_process()
     string_ints = ppi_downloader.string_process()
-    ppi_downloader.merge_all()
+    ppi_downloader.merge_all()   
+    
+    #check_df = ppi_downloader.merge_mall()
+    
     t1 = time()
     print(f'Done in total {round((t1-t0) / 60, 2 )} mins')
