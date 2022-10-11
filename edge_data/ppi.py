@@ -126,7 +126,11 @@ class PPI_data:
 
         biogrid_df["uniprot_a"] = prot_a_uniprots
         biogrid_df["uniprot_b"] = prot_b_uniprots
-
+        
+        # drop rows that contain semicolon (";")
+        biogrid_df_unique.drop(biogrid_df_unique[(biogrid_df_unique["uniprot_a"].str.contains(";")) | (biogrid_df_unique["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
+        biogrid_df_unique.reset_index(drop=True, inplace=True)
+        
         # drop duplicates if same a x b pair exists in b x a format
         # keep both if their pubmed ids are different
         biogrid_df_unique = biogrid_df.dropna(subset=["uniprot_a", "uniprot_b"]).drop_duplicates(subset=["uniprot_a", "uniprot_b"], keep="first").reset_index(drop=True)
@@ -135,10 +139,6 @@ class PPI_data:
         biogrid_df_unique["source"] = "BioGRID"
         biogrid_df_unique = biogrid_df_unique[['source', 'uniprot_a', 'uniprot_b', 'partner_a', 'partner_b', 'pmid', 'experimental_system',  'experimental_system_type', 'tax_a', 'tax_b']]
         biogrid_df_unique.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_partner_a', 'biogrid_partner_b', 'biogrid_pubmed_id', 'biogrid_experimental_system', 'biogrid_experimental_system_type', 'biogrid_tax_a', 'biogrid_tax_b']
-        
-        # drop rows that contain semicolon (";")
-        biogrid_df_unique.drop(biogrid_df_unique[(biogrid_df_unique["uniprot_a"].str.contains(";")) | (biogrid_df_unique["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
-        biogrid_df_unique.reset_index(drop=True, inplace=True)
         
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
         biogrid_df_unique = biogrid_df_unique[(biogrid_df_unique["uniprot_a"].isin(self.swissprots)) & (biogrid_df_unique["uniprot_b"].isin(self.swissprots))]
