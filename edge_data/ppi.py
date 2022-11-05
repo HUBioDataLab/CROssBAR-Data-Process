@@ -128,8 +128,8 @@ class PPI_data:
         biogrid_df["uniprot_b"] = prot_b_uniprots
         
         # drop rows that contain semicolon (";")
-        biogrid_df_unique.drop(biogrid_df_unique[(biogrid_df_unique["uniprot_a"].str.contains(";")) | (biogrid_df_unique["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
-        biogrid_df_unique.reset_index(drop=True, inplace=True)
+        biogrid_df.drop(biogrid_df[(biogrid_df["uniprot_a"].str.contains(";")) | (biogrid_df["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
+        biogrid_df.reset_index(drop=True, inplace=True)
         
         # drop duplicates if same a x b pair exists in b x a format
         # keep both if their pubmed ids are different
