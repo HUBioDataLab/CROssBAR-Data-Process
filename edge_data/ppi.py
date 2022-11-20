@@ -72,7 +72,7 @@ class PPI_data:
         # drop duplicates if same a x b pair exists multiple times 
         # keep the pair with the highest score and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
         # if a x b pair has same interaction type with b x a pair, drop b x a pair
-        intact_df.sort_values(by=['mi_score'], ascending=False, inplace=True)
+        intact_df.sort_values(by=['intact_score'], ascending=False, inplace=True)
         intact_df_unique = intact_df.dropna(subset=["uniprot_a", "uniprot_b"]).reset_index(drop=True)
         intact_df_unique = intact_df_unique.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first", "uniprot_b":"first", 
                                                     "intact_pubmed_id": lambda x: "|".join([str(e) for e in set(x.dropna())]),
