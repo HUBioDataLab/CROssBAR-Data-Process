@@ -66,6 +66,10 @@ class PPI_data:
         intact_df = intact_df[['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']]
         intact_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'intact_pubmed_id', 'intact_score', 'intact_methods', 'intact_interaction_types']
         
+        # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
+        intact_df = intact_df[(intact_df["uniprot_a"].isin(self.swissprots)) & (intact_df["uniprot_b"].isin(self.swissprots))]
+        intact_df.reset_index(drop=True, inplace=True)
+        
         # assing pubmed ids that contain unassigned to NaN value 
         intact_df["intact_pubmed_id"].loc[intact_df["intact_pubmed_id"].astype(str).str.contains("unassigned", na=False)] = np.nan
         
@@ -80,11 +84,6 @@ class PPI_data:
                                                     "intact_interaction_types":"first"})
         intact_df_unique["intact_pubmed_id"].replace("", np.nan, inplace=True) # replace empty string with NaN
         intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "intact_interaction_types"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
-        
-        
-        # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
-        intact_df_unique = intact_df_unique[(intact_df_unique["uniprot_a"].isin(self.swissprots)) & (intact_df_unique["uniprot_b"].isin(self.swissprots))]
-        intact_df_unique.reset_index(drop=True, inplace=True)
         
         intact_output_base = self.export_dataframe(intact_df_unique, "intact")
 
