@@ -62,12 +62,12 @@ class PPI_data:
         for list_column in ["pubmeds", "methods", "interaction_types"]:
             intact_df[list_column] = [';'.join(map(str, l)) for l in intact_df[list_column]]
         
-        intact_df_unique["source"] = "IntAct"
-        intact_df_unique = intact_df_unique[['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']]
-        intact_df_unique.columns = ['source', 'uniprot_a', 'uniprot_b', 'intact_pubmed_id', 'intact_score', 'intact_methods', 'intact_interaction_types']
+        intact_df["source"] = "IntAct"
+        intact_df = intact_df[['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']]
+        intact_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'intact_pubmed_id', 'intact_score', 'intact_methods', 'intact_interaction_types']
         
         # assing pubmed ids that contain unassigned to NaN value 
-        intact_df_unique["intact_pubmed_id"].loc[intact_df_unique["intact_pubmed_id"].astype(str).str.contains("unassigned", na=False)] = np.nan
+        intact_df["intact_pubmed_id"].loc[intact_df["intact_pubmed_id"].astype(str).str.contains("unassigned", na=False)] = np.nan
         
         # drop duplicates if same a x b pair exists multiple times 
         # keep the pair with the highest score and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
@@ -136,15 +136,15 @@ class PPI_data:
         biogrid_df.drop(biogrid_df[(biogrid_df["uniprot_a"].str.contains(";")) | (biogrid_df["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
         biogrid_df.reset_index(drop=True, inplace=True)
         
-        biogrid_df_unique["source"] = "BioGRID"
-        biogrid_df_unique = biogrid_df_unique[['source', 'uniprot_a', 'uniprot_b', 'partner_a', 'partner_b', 'pmid', 'experimental_system',  'experimental_system_type', 'tax_a', 'tax_b']]
-        biogrid_df_unique.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_partner_a', 'biogrid_partner_b', 'biogrid_pubmed_id', 'biogrid_experimental_system', 'biogrid_experimental_system_type', 'biogrid_tax_a', 'biogrid_tax_b']
+        biogrid_df["source"] = "BioGRID"
+        biogrid_df = biogrid_df[['source', 'uniprot_a', 'uniprot_b', 'partner_a', 'partner_b', 'pmid', 'experimental_system',  'experimental_system_type', 'tax_a', 'tax_b']]
+        biogrid_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_partner_a', 'biogrid_partner_b', 'biogrid_pubmed_id', 'biogrid_experimental_system', 'biogrid_experimental_system_type', 'biogrid_tax_a', 'biogrid_tax_b']
         
         # drop duplicates if same a x b pair exists multiple times 
         # keep the first pair and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
         # if a x b pair has same experimental system type with b x a pair, drop b x a pair
         biogrid_df_unique = biogrid_df.dropna(subset=["uniprot_a", "uniprot_b"]).reset_index(drop=True)
-        xx.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first",
+        biogrid_df_unique.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first",
                                                                                              "uniprot_b":"first", "biogrid_partner_a":"first",
                                                                                              "biogrid_partner_b":"first", 
                                                                                              "biogrid_pubmed_id":lambda x: "|".join([str(e) for e in set(x.dropna())]),
