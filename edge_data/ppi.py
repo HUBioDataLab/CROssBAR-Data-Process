@@ -142,8 +142,8 @@ class PPI_data:
         biogrid_df.reset_index(drop=True, inplace=True)
         
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
-        biogrid_df_unique = biogrid_df_unique[(biogrid_df_unique["uniprot_a"].isin(self.swissprots)) & (biogrid_df_unique["uniprot_b"].isin(self.swissprots))]
-        biogrid_df_unique.reset_index(drop=True, inplace=True)
+        biogrid_df = biogrid_df[(biogrid_df["uniprot_a"].isin(self.swissprots)) & (biogrid_df["uniprot_b"].isin(self.swissprots))]
+        biogrid_df.reset_index(drop=True, inplace=True)
         
         # drop duplicates if same a x b pair exists multiple times 
         # keep the first pair and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
@@ -155,6 +155,7 @@ class PPI_data:
                                                                                              "biogrid_pubmed_id":lambda x: "|".join([str(e) for e in set(x.dropna())]),
                                                                                              "biogrid_experimental_system":"first", "biogrid_experimental_system_type":"first",
                                                                                              "biogrid_tax_a":"first", "biogrid_tax_b":"first"})
+        biogrid_df_unique["biogrid_pubmed_id"].replace("", np.nan, inplace=True)
         biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "biogrid_experimental_system"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         biogrid_output_base = self.export_dataframe(biogrid_df_unique, "biogrid")
