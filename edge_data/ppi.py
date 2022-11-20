@@ -11,9 +11,13 @@ from time import time
 from pypath.inputs import intact
 from pypath.inputs import string
 from pypath.inputs import biogrid
-from pypath.share import curl
+from pypath.share import curl, settings
 from pypath.inputs import uniprot
 from pypath.utils import mapping
+
+
+from biocypher._logger import logger
+from contextlib import ExitStack
 
 parser = argparse.ArgumentParser(description='CROssBAR v2 PPI data retrieval arguments')
 
@@ -43,20 +47,40 @@ class PPI_data:
             chunk.to_csv(os.path.join(output_base, f"crossbar_ppi_data_{data_label}_{id+1}.csv"), index=False)
 
         return output_base
-
+    
+    def download_intact_data(self, cache=False, debug=False, retries=6):
+        """
+        Wrapper function to download intact data using pypath; used to access
+        settings.
+        Args:
+            cache: if True, it uses the cached version of the data, otherwise
+            forces download.
+            debug: if True, turns on debug mode in pypath.
+            retries: number of retries in case of download error.
+            
+        To do: Make make arguments of intact.intact_interactions selectable for user.
+        """
+        
+        # stack pypath context managers
+        with ExitStack() as stack:            
+             stack.enter_context(settings.context(retries=retries))
+                
+             if debug:                
+                stack.enter_context(curl.debug_on())
+             if not cache:
+                stack.enter_context(curl.cache_off())
+             
+             logger.debug("Started downloading IntAct data")
+             t0 = time()
+             self.intact_ints = intact.intact_interactions(miscore=0, organism=None, complex_expansion=True, only_proteins=True)
+             t1 = time()
+             
+             logger.info(f'IntAct data is downloaded in {round((t1-t0) / 60, 2)} mins)
+        
     def intact_process(self):
-        print("Started downloading IntAct data")
+        logger.debug("Started processing IntAct data")
 
-        t0 = time()
-
-        with curl.cache_off():
-            intact_ints = intact.intact_interactions(miscore=0, organism=None, complex_expansion=True, only_proteins=True)
-
-        t1 = time()
-
-        print(f'IntAct data is downloaded in {round((t1-t0) / 60, 2)} mins, now started processing')
-
-        intact_df = pd.DataFrame.from_records(intact_ints, columns=intact_ints[0]._fields)
+        intact_df = pd.DataFrame.from_records(self.intact_ints, columns=self.intact_ints[0]._fields)
         
         # turn list columns to string
         for list_column in ["pubmeds", "methods", "interaction_types"]:
