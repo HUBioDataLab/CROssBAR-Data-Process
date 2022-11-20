@@ -132,13 +132,18 @@ class PPI_data:
         biogrid_df["uniprot_a"] = prot_a_uniprots
         biogrid_df["uniprot_b"] = prot_b_uniprots
         
+        # select columns for future use
+        biogrid_df["source"] = "BioGRID"
+        biogrid_df = biogrid_df[['source', 'uniprot_a', 'uniprot_b', 'partner_a', 'partner_b', 'pmid', 'experimental_system',  'experimental_system_type', 'tax_a', 'tax_b']]
+        biogrid_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_partner_a', 'biogrid_partner_b', 'biogrid_pubmed_id', 'biogrid_experimental_system', 'biogrid_experimental_system_type', 'biogrid_tax_a', 'biogrid_tax_b']
+        
         # drop rows that have semicolon (";")
         biogrid_df.drop(biogrid_df[(biogrid_df["uniprot_a"].str.contains(";")) | (biogrid_df["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
         biogrid_df.reset_index(drop=True, inplace=True)
         
-        biogrid_df["source"] = "BioGRID"
-        biogrid_df = biogrid_df[['source', 'uniprot_a', 'uniprot_b', 'partner_a', 'partner_b', 'pmid', 'experimental_system',  'experimental_system_type', 'tax_a', 'tax_b']]
-        biogrid_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_partner_a', 'biogrid_partner_b', 'biogrid_pubmed_id', 'biogrid_experimental_system', 'biogrid_experimental_system_type', 'biogrid_tax_a', 'biogrid_tax_b']
+        # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
+        biogrid_df_unique = biogrid_df_unique[(biogrid_df_unique["uniprot_a"].isin(self.swissprots)) & (biogrid_df_unique["uniprot_b"].isin(self.swissprots))]
+        biogrid_df_unique.reset_index(drop=True, inplace=True)
         
         # drop duplicates if same a x b pair exists multiple times 
         # keep the first pair and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
@@ -151,10 +156,6 @@ class PPI_data:
                                                                                              "biogrid_experimental_system":"first", "biogrid_experimental_system_type":"first",
                                                                                              "biogrid_tax_a":"first", "biogrid_tax_b":"first"})
         biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "biogrid_experimental_system"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
-        
-        # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
-        biogrid_df_unique = biogrid_df_unique[(biogrid_df_unique["uniprot_a"].isin(self.swissprots)) & (biogrid_df_unique["uniprot_b"].isin(self.swissprots))]
-        biogrid_df_unique.reset_index(drop=True, inplace=True)
         
         biogrid_output_base = self.export_dataframe(biogrid_df_unique, "biogrid")
 
