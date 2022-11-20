@@ -109,48 +109,72 @@ class PPI_data:
         intact_df_unique["intact_pubmed_id"].replace("", np.nan, inplace=True) # replace empty string with NaN
         intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "intact_interaction_types"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
-        intact_output_base = self.export_dataframe(intact_df_unique, "intact")
-
-        t2 = time()
-        print(f'IntAct data is processed and written in {round((t2-t1) / 60, 2)} mins: {intact_output_base}')
-
+        #intact_output_base = self.export_dataframe(intact_df_unique, "intact")
+       
         self.final_intact_ints = intact_df_unique
-
+        
+        t2 = time()
+        logger.info(f'IntAct data is processed and written in {round((t2-t1) / 60, 2)} mins')
+                         
+    def download_biogrid_data(self, cache=False, debug=False, retries=6):
+        """
+        Wrapper function to download intact data using pypath; used to access
+        settings.
+        Args:
+            cache: if True, it uses the cached version of the data, otherwise
+            forces download.
+            debug: if True, turns on debug mode in pypath.
+            retries: number of retries in case of download error.
             
-
+        To do: Make make arguments of intact.intact_interactions selectable for user.
+        """
+        
+        # stack pypath context managers
+        with ExitStack() as stack:            
+             stack.enter_context(settings.context(retries=retries))
+                
+             if debug:                
+                stack.enter_context(curl.debug_on())
+             if not cache:
+                stack.enter_context(curl.cache_off())
+             
+             logger.debug("Started downloading IntAct data")
+             t0 = time()
+                         
+             # download biogrid data
+             self.biogrid_ints = biogrid.biogrid_all_interactions(None, 9999999999, False)
+                         
+             # download these fields for mapping from gene symbol to uniprot id          
+             self.uniprot_to_gene = uniprot.uniprot_data("genes", "*", True)
+             self.uniprot_to_tax = uniprot.uniprot_data("organism-id", "*", True)
+                         
+             t1 = time()
+             logger.info(f'BioGRID data is downloaded in {round((t1-t0) / 60, 2)} mins')
+                         
     def biogrid_process(self):
-        t0 = time()
-        print("Started downloading BioGRID data")
-
-        with curl.cache_off():
-            biogrid_ints = biogrid.biogrid_all_interactions(None, 9999999999, False)
+        logger.debug("Started processing BioGRID data")
 
         t1 = time()
-        
-        print(f'BioGRID data is downloaded in {round((t1-t0) / 60, 2)} mins, now started processing')
-            
-        biogrid_df = pd.DataFrame.from_records(biogrid_ints, columns=biogrid_ints[0]._fields)
+                    
+        biogrid_df = pd.DataFrame.from_records(self.biogrid_ints, columns=self.biogrid_ints[0]._fields)
 
         # biogrid id (gene symbols) to uniprot id mapping
         biogrid_df['partner_a'] = biogrid_df['partner_a'].str.upper()
         biogrid_df['partner_b'] = biogrid_df['partner_b'].str.upper()
-        with curl.cache_off():
-            uniprot_to_gene = uniprot.uniprot_data("genes", "*", True)
-            uniprot_to_tax = uniprot.uniprot_data("organism-id", "*", True)
-
+                         
         gene_to_uniprot = collections.defaultdict(list)
-        for k,v in uniprot_to_gene.items():
+        for k,v in self.uniprot_to_gene.items():
             for gene in v.split():
                 gene_to_uniprot[gene.upper()].append(k)
 
         prot_a_uniprots = []
         for prot, tax in zip(biogrid_df['partner_a'], biogrid_df['tax_a']):
-            uniprot_id_a = ";".join([_id for _id in gene_to_uniprot[prot] if tax == uniprot_to_tax[_id]])
+            uniprot_id_a = ";".join([_id for _id in gene_to_uniprot[prot] if tax == self.uniprot_to_tax[_id]])
             prot_a_uniprots.append(uniprot_id_a)
 
         prot_b_uniprots = []
         for prot, tax in zip(biogrid_df['partner_b'], biogrid_df['tax_b']):
-            uniprot_id_b = ";".join([_id for _id in gene_to_uniprot[prot] if tax == uniprot_to_tax[_id]])
+            uniprot_id_b = ";".join([_id for _id in gene_to_uniprot[prot] if tax == self.uniprot_to_tax[_id]])
             prot_b_uniprots.append(uniprot_id_b)
 
         biogrid_df["uniprot_a"] = prot_a_uniprots
@@ -180,30 +204,63 @@ class PPI_data:
         biogrid_df_unique["biogrid_pubmed_id"].replace("", np.nan, inplace=True)
         biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "biogrid_experimental_system"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
-        biogrid_output_base = self.export_dataframe(biogrid_df_unique, "biogrid")
-
-        t2 = time()
-        print(f'BioGRID data is processed and written in {round((t2-t1) / 60, 2)} mins: {biogrid_output_base}')
+        #biogrid_output_base = self.export_dataframe(biogrid_df_unique, "biogrid")
 
         self.final_biogrid_ints = biogrid_df_unique
-
-
+        
+        t2 = time()
+        logger.info(f'BioGRID data is processed and written in {round((t2-t1) / 60, 2)} mins')
+    
+    def download_string_data(self, cache=False, debug=False, retries=6):
+        """
+        Wrapper function to download intact data using pypath; used to access
+        settings.
+        Args:
+            cache: if True, it uses the cached version of the data, otherwise
+            forces download.
+            debug: if True, turns on debug mode in pypath.
+            retries: number of retries in case of download error.
+            
+        To do: Make make arguments of intact.intact_interactions selectable for user.
+        """
+        
+        # stack pypath context managers
+        with ExitStack() as stack:                         
+             stack.enter_context(settings.context(retries=retries))
+                
+             if debug:                
+                stack.enter_context(curl.debug_on())
+             if not cache:
+                stack.enter_context(curl.cache_off())
+             
+             logger.debug("Started downloading String data")
+             t0 = time()             
+             uniprot_tax = uniprot.uniprot_data("organism-id", "*")
+             self.tax_ids=set(uniprot_tax.values())
+             
+             #map string ids to swissprot ids
+             self.uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
+                         
+             self.string_ints = []
+             for tax in tqdm(self.tax_ids):                         
+                try:
+                    organism_string_ints = [i for i in string.string_links_interactions(ncbi_tax_id=int(tax), score_threshold="high_confidence")]
+                    logger.info(f"Downloaded String data with taxonomy id {str(tax)}")
+                except Exception as e:
+                    organism_string_ints = None
+                         
+                if organism_string_ints:
+                    self.string_ints.extend(organism_string_ints)
+                         
     def string_process(self):
-        string_output_base =  os.path.join(self.output_dir, "string")
-        Path(string_output_base).mkdir(parents=True, exist_ok=True)
+        #string_output_base =  os.path.join(self.output_dir, "string")
+        #Path(string_output_base).mkdir(parents=True, exist_ok=True)
 
-        log_path = os.path.join(string_output_base, "skipped_tax_in_string.log")
-        logfile = open(log_path, 'w')
-
-        with curl.cache_off():
-            uniprot_tax=uniprot.uniprot_data("organism-id", "*")
-        tax_ids=set(uniprot_tax.values())
-
-        #map string ids to swissprot ids
-        with curl.cache_off():
-            uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
+        #log_path = os.path.join(string_output_base, "skipped_tax_in_string.log")
+        #logfile = open(log_path, 'w')
+                         
         string_to_uniprot = collections.defaultdict(list)
-        for k,v in uniprot_to_string.items():
+        for k,v in self.uniprot_to_string.items():
             for string_id in list(filter(None, v.split(";"))):
                 string_to_uniprot[string_id.split(".")[1]].append(k)
 
