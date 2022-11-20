@@ -78,6 +78,7 @@ class PPI_data:
                                                     "intact_pubmed_id": lambda x: "|".join([str(e) for e in set(x.dropna())]),
                                                    "intact_score":"first", "intact_methods":"first", 
                                                     "intact_interaction_types":"first"})
+        intact_df_unique["intact_pubmed_id"].replace("", np.nan, inplace=True) # replace empty string with NaN
         intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "intact_interaction_types"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         
