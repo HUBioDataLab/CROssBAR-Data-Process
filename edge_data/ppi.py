@@ -61,20 +61,25 @@ class PPI_data:
         # turn list columns to string
         for list_column in ["pubmeds", "methods", "interaction_types"]:
             intact_df[list_column] = [';'.join(map(str, l)) for l in intact_df[list_column]]
-
-        # drop duplicates if same a x b pair exists in b x a format
-        # keep the one with the highest score
-        # keep both if their interaction types are different
-        intact_df.sort_values(by=['mi_score'], ascending=False, inplace=True)
-        intact_df_unique = intact_df.dropna(subset=["id_a", "id_b"]).drop_duplicates(subset=["id_a", "id_b"], keep="first").reset_index(drop=True)
-        intact_df_unique = intact_df_unique[~intact_df_unique[["id_a", "id_b", "interaction_types"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
-
+        
         intact_df_unique["source"] = "IntAct"
         intact_df_unique = intact_df_unique[['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']]
         intact_df_unique.columns = ['source', 'uniprot_a', 'uniprot_b', 'intact_pubmed_id', 'intact_score', 'intact_methods', 'intact_interaction_types']
         
         # assing pubmed ids that contain unassigned to NaN value 
         intact_df_unique["intact_pubmed_id"].loc[intact_df_unique["intact_pubmed_id"].astype(str).str.contains("unassigned", na=False)] = np.nan
+        
+        # drop duplicates if same a x b pair exists multiple times 
+        # keep the pair with the highest score and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
+        # if a x b pair has same interaction type with b x a pair, drop b x a pair
+        intact_df.sort_values(by=['mi_score'], ascending=False, inplace=True)
+        intact_df_unique = intact_df.dropna(subset=["uniprot_a", "uniprot_b"]).reset_index(drop=True)
+        intact_df_unique = intact_df_unique.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first", "uniprot_b":"first", 
+                                                    "intact_pubmed_id": lambda x: "|".join([str(e) for e in set(x.dropna())]),
+                                                   "intact_score":"first", "intact_methods":"first", 
+                                                    "intact_interaction_types":"first"})
+        intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "intact_interaction_types"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        
         
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
         intact_df_unique = intact_df_unique[(intact_df_unique["uniprot_a"].isin(self.swissprots)) & (intact_df_unique["uniprot_b"].isin(self.swissprots))]
@@ -127,18 +132,25 @@ class PPI_data:
         biogrid_df["uniprot_a"] = prot_a_uniprots
         biogrid_df["uniprot_b"] = prot_b_uniprots
         
-        # drop rows that contain semicolon (";")
+        # drop rows that have semicolon (";")
         biogrid_df.drop(biogrid_df[(biogrid_df["uniprot_a"].str.contains(";")) | (biogrid_df["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
         biogrid_df.reset_index(drop=True, inplace=True)
         
-        # drop duplicates if same a x b pair exists in b x a format
-        # keep both if their pubmed ids are different
-        biogrid_df_unique = biogrid_df.dropna(subset=["uniprot_a", "uniprot_b"]).drop_duplicates(subset=["uniprot_a", "uniprot_b"], keep="first").reset_index(drop=True)
-        biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "pmid"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
-
         biogrid_df_unique["source"] = "BioGRID"
         biogrid_df_unique = biogrid_df_unique[['source', 'uniprot_a', 'uniprot_b', 'partner_a', 'partner_b', 'pmid', 'experimental_system',  'experimental_system_type', 'tax_a', 'tax_b']]
         biogrid_df_unique.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_partner_a', 'biogrid_partner_b', 'biogrid_pubmed_id', 'biogrid_experimental_system', 'biogrid_experimental_system_type', 'biogrid_tax_a', 'biogrid_tax_b']
+        
+        # drop duplicates if same a x b pair exists multiple times 
+        # keep the first pair and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
+        # if a x b pair has same experimental system type with b x a pair, drop b x a pair
+        biogrid_df_unique = biogrid_df.dropna(subset=["uniprot_a", "uniprot_b"]).reset_index(drop=True)
+        xx.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first",
+                                                                                             "uniprot_b":"first", "biogrid_partner_a":"first",
+                                                                                             "biogrid_partner_b":"first", 
+                                                                                             "biogrid_pubmed_id":lambda x: "|".join([str(e) for e in set(x.dropna())]),
+                                                                                             "biogrid_experimental_system":"first", "biogrid_experimental_system_type":"first",
+                                                                                             "biogrid_tax_a":"first", "biogrid_tax_b":"first"})
+        biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "biogrid_experimental_system"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
         biogrid_df_unique = biogrid_df_unique[(biogrid_df_unique["uniprot_a"].isin(self.swissprots)) & (biogrid_df_unique["uniprot_b"].isin(self.swissprots))]
