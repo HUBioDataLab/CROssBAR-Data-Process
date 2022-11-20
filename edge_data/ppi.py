@@ -134,8 +134,8 @@ class PPI_data:
         
         # select columns for future use
         biogrid_df["source"] = "BioGRID"
-        biogrid_df = biogrid_df[['source', 'uniprot_a', 'uniprot_b', 'partner_a', 'partner_b', 'pmid', 'experimental_system',  'experimental_system_type', 'tax_a', 'tax_b']]
-        biogrid_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_partner_a', 'biogrid_partner_b', 'biogrid_pubmed_id', 'biogrid_experimental_system', 'biogrid_experimental_system_type', 'biogrid_tax_a', 'biogrid_tax_b']
+        biogrid_df = biogrid_df[['source', 'uniprot_a', 'uniprot_b', 'pmid', 'experimental_system']]
+        biogrid_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_pubmed_id', 'biogrid_experimental_system']
         
         # drop rows that have semicolon (";")
         biogrid_df.drop(biogrid_df[(biogrid_df["uniprot_a"].str.contains(";")) | (biogrid_df["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
@@ -150,11 +150,9 @@ class PPI_data:
         # if a x b pair has same experimental system type with b x a pair, drop b x a pair
         biogrid_df_unique = biogrid_df.dropna(subset=["uniprot_a", "uniprot_b"]).reset_index(drop=True)
         biogrid_df_unique.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first",
-                                                                                             "uniprot_b":"first", "biogrid_partner_a":"first",
-                                                                                             "biogrid_partner_b":"first", 
+                                                                                             "uniprot_b":"first", 
                                                                                              "biogrid_pubmed_id":lambda x: "|".join([str(e) for e in set(x.dropna())]),
-                                                                                             "biogrid_experimental_system":"first", "biogrid_experimental_system_type":"first",
-                                                                                             "biogrid_tax_a":"first", "biogrid_tax_b":"first"})
+                                                                                             "biogrid_experimental_system":"first"})
         biogrid_df_unique["biogrid_pubmed_id"].replace("", np.nan, inplace=True)
         biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "biogrid_experimental_system"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
