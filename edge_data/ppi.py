@@ -121,12 +121,12 @@ class PPI_data:
 
         prot_a_uniprots = []
         for prot, tax in zip(biogrid_df['partner_a'], biogrid_df['tax_a']):
-            uniprot_id_a = ";".join([id for id in gene_to_uniprot[prot] if tax == uniprot_to_tax[id]])
+            uniprot_id_a = ";".join([_id for _id in gene_to_uniprot[prot] if tax == uniprot_to_tax[_id]])
             prot_a_uniprots.append(uniprot_id_a)
 
         prot_b_uniprots = []
         for prot, tax in zip(biogrid_df['partner_b'], biogrid_df['tax_b']):
-            uniprot_id_b = ";".join([id for id in gene_to_uniprot[prot] if tax == uniprot_to_tax[id]])
+            uniprot_id_b = ";".join([_id for _id in gene_to_uniprot[prot] if tax == uniprot_to_tax[_id]])
             prot_b_uniprots.append(uniprot_id_b)
 
         biogrid_df["uniprot_a"] = prot_a_uniprots
