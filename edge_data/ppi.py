@@ -252,12 +252,17 @@ class PPI_data:
                 if organism_string_ints:
                     self.string_ints.extend(organism_string_ints)
                          
+             t1 = time()
+             logger.info(f'String data is downloaded in {round((t1-t0) / 60, 2)} mins')
+                         
     def string_process(self, selected_fields=['source', 'uniprot_a', 'uniprot_b', 'combined_score', 'physical_combined_score']):
         #string_output_base =  os.path.join(self.output_dir, "string")
         #Path(string_output_base).mkdir(parents=True, exist_ok=True)
 
         #log_path = os.path.join(string_output_base, "skipped_tax_in_string.log")
         #logfile = open(log_path, 'w')
+        
+        logger.debug("Started processing String data")
                          
         string_to_uniprot = collections.defaultdict(list)
         for k,v in self.uniprot_to_string.items():
@@ -316,6 +321,8 @@ class PPI_data:
         all_output_base = self.export_dataframe(temp, "all_ppi_splitted")
       
     def merge_mall(self):
+        logger.debug("started merging interactions from all 3 databases (intact, biogrid, string)")
+                         
         # select and define fields of intact dataframe
         intact_refined_df_selected_features = self.final_intact_ints.rename(columns={"intact_methods":"method", "intact_interaction_types":"interaction_type", "intact_pubmed_id":"pubmed_id"})
         intact_refined_df_selected_features = intact_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method", "interaction_type", "intact_score"])
@@ -379,7 +386,8 @@ class PPI_data:
                                                           'method', 'interaction_type', 'intact_score', 
                                                           'string_combined_score', 'string_physical_combined_score'])
         
-        
+        logger.debug("merged intact and biogrid")
+                         
         # merge intact+biogrid with string
         all_selected_features_df = pd.merge(intact_plus_biogrid_selected_features_df, string_refined_df_selected_features, on=["uniprot_a", "uniprot_b"], how="outer")
         
@@ -418,6 +426,8 @@ class PPI_data:
         # then revert back them
         all_selected_features_df["string_physical_combined_score"] = all_selected_features_df["string_physical_combined_score"].apply(float_to_int)
         
+        logger.debug("merged all")
+                         
         return all_selected_features_df      
         
         
