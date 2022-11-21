@@ -77,7 +77,7 @@ class PPI_data:
              
              logger.info(f'IntAct data is downloaded in {round((t1-t0) / 60, 2)} mins)
         
-    def intact_process(self):
+    def intact_process(self, selected_fields=['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']):
         logger.debug("Started processing IntAct data")
 
         intact_df = pd.DataFrame.from_records(self.intact_ints, columns=self.intact_ints[0]._fields)
@@ -87,7 +87,7 @@ class PPI_data:
             intact_df[list_column] = [';'.join(map(str, l)) for l in intact_df[list_column]]
         
         intact_df["source"] = "IntAct"
-        intact_df = intact_df[['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']]
+        intact_df = intact_df[selected_fields]
         intact_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'intact_pubmed_id', 'intact_score', 'intact_methods', 'intact_interaction_types']
         
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
@@ -151,7 +151,7 @@ class PPI_data:
              t1 = time()
              logger.info(f'BioGRID data is downloaded in {round((t1-t0) / 60, 2)} mins')
                          
-    def biogrid_process(self):
+    def biogrid_process(self, selected_fields=['source', 'uniprot_a', 'uniprot_b', 'pmid', 'experimental_system']):
         logger.debug("Started processing BioGRID data")
 
         t1 = time()
@@ -182,7 +182,7 @@ class PPI_data:
         
         # select columns for future use
         biogrid_df["source"] = "BioGRID"
-        biogrid_df = biogrid_df[['source', 'uniprot_a', 'uniprot_b', 'pmid', 'experimental_system']]
+        biogrid_df = biogrid_df[selected_fields]
         biogrid_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_pubmed_id', 'biogrid_experimental_system']
         
         # drop rows that have semicolon (";")
@@ -252,7 +252,7 @@ class PPI_data:
                 if organism_string_ints:
                     self.string_ints.extend(organism_string_ints)
                          
-    def string_process(self):
+    def string_process(self, selected_fields=['source', 'uniprot_a', 'uniprot_b', 'combined_score', 'physical_combined_score']):
         #string_output_base =  os.path.join(self.output_dir, "string")
         #Path(string_output_base).mkdir(parents=True, exist_ok=True)
 
@@ -265,6 +265,7 @@ class PPI_data:
                 string_to_uniprot[string_id.split(".")[1]].append(k)
 
         string_df = pd.DataFrame.from_records(self.string_ints, columns=self.string_ints[0]._fields)
+        string_df.fillna(value=np.nan, inplace=True)
                          
         prot_a_uniprots = []
         for protein in string_df['protein_a']:            
@@ -282,7 +283,7 @@ class PPI_data:
         string_df["uniprot_b"] = prot_b_uniprots
         
         string_df["source"] = "STRING"
-        string_df = string_df[['source', 'uniprot_a', 'uniprot_b', 'combined_score', 'physical_combined_score']]
+        string_df = string_df[selected_fields]
         string_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'string_combined_score', 'string_physical_combined_score']
         
         # filter with swissprot ids
@@ -322,13 +323,11 @@ class PPI_data:
         intact_refined_df_selected_features["string_physical_combined_score"] = np.nan
         
         # select and define fields of biogrid dataframe
-        biogrid_refined_df_selected_features = self.final_biogrid_ints.drop(columns=["biogrid_partner_a", "biogrid_partner_b", "biogrid_experimental_system_type", "biogrid_tax_a", "biogrid_tax_b"])
         biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.rename(columns={"biogrid_experimental_system":"method", "biogrid_pubmed_id":"pubmed_id"})
         biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.reindex(columns=["source","uniprot_a","uniprot_b", "pubmed_id", "method"])
         biogrid_refined_df_selected_features[["interaction_type", "intact_score", "string_combined_score", "string_physical_combined_score"]] = np.nan
         
         # select and define fields of string dataframe
-        string_refined_df_selected_features = self.final_string_ints.drop(columns=["string_partner_a","string_partner_b"])
         string_refined_df_selected_features[["pubmed_id", "method", "interaction_type", "intact_score"]] = np.nan
         string_refined_df_selected_features = string_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b",
         "pubmed_id", "method", "interaction_type", "intact_score", "string_combined_score", "string_physical_combined_score"])
@@ -343,8 +342,21 @@ class PPI_data:
         # drop redundant columns
         intact_plus_biogrid_selected_features_df.drop(columns=["source_x", "source_y"], inplace=True)
         
+        def merge_pubmed_ids(elem):            
+            if len(elem.dropna().tolist()) > 0:                
+                new_list = []
+                for e in elem.dropna().tolist():                    
+                    if "|" in e:                        
+                        new_list.extend(e.split("|"))
+                    else:
+                        new_list.append(e)
+        
+                return "|".join(list(set(new_list))) 
+            else:
+                return np.nan
+        
         # merge pubmed_id_x and pubmed_id_y columns
-        intact_plus_biogrid_selected_features_df["pubmed_id"] = intact_plus_biogrid_selected_features_df[["pubmed_id_x", "pubmed_id_y"]].apply(lambda x: int(x.dropna().tolist()[0]) if len(x.dropna().tolist())>0 else np.nan, axis=1)
+        intact_plus_biogrid_selected_features_df["pubmed_id"] = intact_plus_biogrid_selected_features_df[["pubmed_id_x", "pubmed_id_y"]].apply(merge_pubmed_ids, axis=1)
         
         # drop redundant columns
         intact_plus_biogrid_selected_features_df.drop(columns=["pubmed_id_x", "pubmed_id_y"], inplace=True)
@@ -391,7 +403,7 @@ class PPI_data:
                                                           'string_combined_score', 'string_physical_combined_score'])
         
         
-        # during the merging of 2 pubmed_id columns, it changes datatype from int to float. So it needs to be reverted
+        # during the merging, it changes datatypes of some columns from int to float. So it needs to be reverted
         def float_to_int(element):
             if "." in str(element):                
                 dot_index = str(element).index(".")
@@ -401,11 +413,9 @@ class PPI_data:
                 return element
         
         # first make their datatype as string
-        all_selected_features_df["pubmed_id"] = all_selected_features_df["pubmed_id"].astype(str, errors="ignore")
         all_selected_features_df["string_physical_combined_score"] = all_selected_features_df["string_physical_combined_score"].astype(str, errors="ignore")
         
         # then revert back them
-        all_selected_features_df["pubmed_id"] = all_selected_features_df["pubmed_id"].apply(float_to_int)
         all_selected_features_df["string_physical_combined_score"] = all_selected_features_df["string_physical_combined_score"].apply(float_to_int)
         
         return all_selected_features_df      
@@ -415,13 +425,18 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     t0 = time() 
-    ppi_downloader = PPI_data(output_dir=args.output_dir, n_rows_in_file=args.n_rows_in_file) 
-    intact_ints = ppi_downloader.intact_process()
-    biogrid_ints =ppi_downloader.biogrid_process()
+    ppi_downloader = PPI_data(output_dir=args.output_dir, n_rows_in_file=args.n_rows_in_file)
+    # intact
+    ppi_downloader.download_intact_data()
+    ppi_downloader.intact_process()
+    # biogrid
+    ppi_downloader.download_biogrid_data()
+    ppi_downloader.biogrid_process()
+    # string
+    ppi_downloader.download_string_data()
     string_ints = ppi_downloader.string_process()
-    ppi_downloader.merge_all()   
-    
-    #check_df = ppi_downloader.merge_mall()
-    
+    # merge all 3 databases
+    check_df = ppi_downloader.merge_mall()    
+   
     t1 = time()
     print(f'Done in total {round((t1-t0) / 60, 2 )} mins')
