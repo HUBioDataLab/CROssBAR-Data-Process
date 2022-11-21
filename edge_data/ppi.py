@@ -169,12 +169,12 @@ class PPI_data:
 
         prot_a_uniprots = []
         for prot, tax in zip(biogrid_df['partner_a'], biogrid_df['tax_a']):
-            uniprot_id_a = ";".join([_id for _id in gene_to_uniprot[prot] if tax == self.uniprot_to_tax[_id]])
+            uniprot_id_a = ";".join([_id for _id in gene_to_uniprot[prot] if tax == self.uniprot_to_tax[_id]]) # To do: if entry doesnt exist, make it None
             prot_a_uniprots.append(uniprot_id_a)
 
         prot_b_uniprots = []
         for prot, tax in zip(biogrid_df['partner_b'], biogrid_df['tax_b']):
-            uniprot_id_b = ";".join([_id for _id in gene_to_uniprot[prot] if tax == self.uniprot_to_tax[_id]])
+            uniprot_id_b = ";".join([_id for _id in gene_to_uniprot[prot] if tax == self.uniprot_to_tax[_id]]) # To do: if entry doesnt exist, make it None
             prot_b_uniprots.append(uniprot_id_b)
 
         biogrid_df["uniprot_a"] = prot_a_uniprots
@@ -221,7 +221,7 @@ class PPI_data:
             debug: if True, turns on debug mode in pypath.
             retries: number of retries in case of download error.
             
-        To do: Make make arguments of intact.intact_interactions selectable for user.
+        To do: Make make arguments of string.string_links_interactions selectable for user.
         """
         
         # stack pypath context managers
@@ -264,90 +264,38 @@ class PPI_data:
             for string_id in list(filter(None, v.split(";"))):
                 string_to_uniprot[string_id.split(".")[1]].append(k)
 
-        print("Started downloading and processing STRING data")
-        print(f"Check the progress from {log_path} for the rest of the process")
-
-        # download organism specific string data and collect into a single list
-        ranges = range(0, len(tax_ids), 500)
-        organisms_with_string_ints_total = 0
-
-        self.final_string_ints = pd.DataFrame(columns = ['source', 'uniprot_a', 'uniprot_b', 'string_partner_a', 'string_partner_b', 'string_combined_score', 'string_physical_combined_score'])
+        string_df = pd.DataFrame.from_records(self.string_ints, columns=self.string_ints[0]._fields)
+                         
+        prot_a_uniprots = []
+        for protein in string_df['protein_a']:            
+            id_a= (";".join(string_to_uniprot[protein])
+                   if protein in string_to_uniprot else None)
+                   prot_a_uniprots.append(id_a)
+                         
+        prot_b_uniprots = []
+        for protein in string_df['protein_b']:            
+            id_b= (";".join(string_to_uniprot[protein])
+                   if protein in string_to_uniprot else None)
+                   prot_b_uniprots.append(id_b)
+                         
+        string_df["uniprot_a"] = prot_a_uniprots
+        string_df["uniprot_b"] = prot_b_uniprots
         
-        t0 = time()
-        for idx, r in enumerate(ranges):
-            t0_0 = time()
-            tax_chunk = list(tax_ids)[r:r + 500]
-            string_ints = []
-            organisms_with_string_ints = 0
-
-            for tax in tax_chunk:
-                try: 
-                    with curl.cache_off():
-                        organism_string_ints = [i for i in string.string_links_interactions(ncbi_tax_id=int(tax), score_threshold="high_confidence")]
-                    string_ints.extend(organism_string_ints)
-                    logfile.write(f"{tax} done\n")
-                    logfile.flush()
-                    organisms_with_string_ints += 1
-                    organisms_with_string_ints_total += 1
-                except Exception as e: # there are no interactions for this tax
-                    pass
-            
-            if string_ints:
-                string_df = pd.DataFrame.from_records(string_ints, columns=string_ints[0]._fields)
-
-                # map string ids to uniprot ids
-                prot_a_uniprots = []
-                for protein in string_df['protein_a']:
-                    id_a= (
-                        ";".join(string_to_uniprot[protein])
-                            if protein in string_to_uniprot else
-                        None
-                    )
-                    prot_a_uniprots.append(id_a)
-
-                prot_b_uniprots = []
-                for protein in string_df['protein_b']:
-                    id_b= (
-                        ";".join(string_to_uniprot[protein])
-                            if protein in string_to_uniprot else
-                        None
-                    )
-                    prot_b_uniprots.append(id_b)
-
-                string_df["uniprot_a"] = prot_a_uniprots
-                string_df["uniprot_b"] = prot_b_uniprots
-
-                # drop duplicates if same a x b pair exists in b x a format
-                # keep the one with the highest combined score
-                string_df.sort_values(by=['combined_score'], ascending=False, inplace=True)
-                string_df_unique = string_df.dropna(subset=["uniprot_a", "uniprot_b"]).drop_duplicates(subset=["uniprot_a", "uniprot_b"], keep="first").reset_index(drop=True)
-                string_df_unique = string_df_unique[~string_df_unique[["uniprot_a", "uniprot_b", "combined_score"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
-
-                string_df_unique["source"] = "STRING"
-                string_df_unique = string_df_unique[['source', 'uniprot_a', 'uniprot_b', 'protein_a', 'protein_b', 'combined_score', 'physical_combined_score']]
-                string_df_unique.columns = ['source', 'uniprot_a', 'uniprot_b', 'string_partner_a', 'string_partner_b', 'string_combined_score', 'string_physical_combined_score']
-
-                # filter with swissprot ids
-                string_df_unique = string_df_unique[(string_df_unique["uniprot_a"].isin(self.swissprots)) & (string_df_unique["uniprot_b"].isin(self.swissprots))]
-                string_df_unique.reset_index(drop=True, inplace=True)
+        string_df["source"] = "STRING"
+        string_df = string_df[['source', 'uniprot_a', 'uniprot_b', 'combined_score', 'physical_combined_score']]
+        string_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'string_combined_score', 'string_physical_combined_score']
+        
+        # filter with swissprot ids
+        string_df = string_df[(string_df["uniprot_a"].isin(self.swissprots)) & (string_df["uniprot_b"].isin(self.swissprots))]
+        string_df.reset_index(drop=True, inplace=True)
+                         
+        # drop duplicates if same a x b pair exists in b x a format
+        # keep the one with the highest combined score
+        string_df.sort_values(by=['combined_score'], ascending=False, inplace=True)
+        string_df_unique = string_df.dropna(subset=["uniprot_a", "uniprot_b"]).drop_duplicates(subset=["uniprot_a", "uniprot_b"], keep="first").reset_index(drop=True)
+        string_df_unique = string_df_unique[~string_df_unique[["uniprot_a", "uniprot_b", "combined_score"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
                 
-                t0_1 = time()
-                string_output = os.path.join(string_output_base, f"crossbar_ppi_data_string_{idx+1}.csv")
-                string_df_unique.to_csv(string_output, index=False)
-
-                logfile.write(f'STRING data for {organisms_with_string_ints}/{len(tax_chunk)} organisms in the batch {idx+1} is processed and written in {round((t0_1-t0_0) / 60, 2)} mins: {string_output_base}\n')
-                logfile.flush()
-
-            else:
-                logfile.write(f'There are no STRING interactions for {len(tax_chunk)} organisms in the batch {idx+1}\n')
-                logfile.flush()
-
-            self.final_string_ints = pd.concat([self.final_string_ints, string_df_unique])
-
-        t1 = time()
-        logfile.write(f'STRING data is processed and written in {round((t1-t0) / 60, 2)} mins for total {organisms_with_string_ints_total} organisms')
-        logfile.flush()
-
+        self.final_string_ints = string_df_unique
 
     def merge_all(self):
 
