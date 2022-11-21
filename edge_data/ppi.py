@@ -79,7 +79,9 @@ class PPI_data:
         
     def intact_process(self, selected_fields=['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']):
         logger.debug("Started processing IntAct data")
-
+        t1 = time()
+                         
+        # create dataframe            
         intact_df = pd.DataFrame.from_records(self.intact_ints, columns=self.intact_ints[0]._fields)
         
         # turn list columns to string
@@ -114,7 +116,7 @@ class PPI_data:
         self.final_intact_ints = intact_df_unique
         
         t2 = time()
-        logger.info(f'IntAct data is processed and written in {round((t2-t1) / 60, 2)} mins')
+        logger.info(f'IntAct data is processed in {round((t2-t1) / 60, 2)} mins')
                          
     def download_biogrid_data(self, cache=False, debug=False, retries=6):
         """
@@ -155,7 +157,8 @@ class PPI_data:
         logger.debug("Started processing BioGRID data")
 
         t1 = time()
-                    
+                         
+        # create dataframe          
         biogrid_df = pd.DataFrame.from_records(self.biogrid_ints, columns=self.biogrid_ints[0]._fields)
 
         # biogrid id (gene symbols) to uniprot id mapping
@@ -209,7 +212,7 @@ class PPI_data:
         self.final_biogrid_ints = biogrid_df_unique
         
         t2 = time()
-        logger.info(f'BioGRID data is processed and written in {round((t2-t1) / 60, 2)} mins')
+        logger.info(f'BioGRID data is processed in {round((t2-t1) / 60, 2)} mins')
     
     def download_string_data(self, cache=False, debug=False, retries=6):
         """
@@ -263,12 +266,14 @@ class PPI_data:
         #logfile = open(log_path, 'w')
         
         logger.debug("Started processing String data")
+        t1 = time()
                          
         string_to_uniprot = collections.defaultdict(list)
         for k,v in self.uniprot_to_string.items():
             for string_id in list(filter(None, v.split(";"))):
                 string_to_uniprot[string_id.split(".")[1]].append(k)
-
+                         
+        # create dataframe
         string_df = pd.DataFrame.from_records(self.string_ints, columns=self.string_ints[0]._fields)
         string_df.fillna(value=np.nan, inplace=True)
                          
@@ -300,7 +305,10 @@ class PPI_data:
         string_df.sort_values(by=['combined_score'], ascending=False, inplace=True)
         string_df_unique = string_df.dropna(subset=["uniprot_a", "uniprot_b"]).drop_duplicates(subset=["uniprot_a", "uniprot_b"], keep="first").reset_index(drop=True)
         string_df_unique = string_df_unique[~string_df_unique[["uniprot_a", "uniprot_b", "combined_score"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
-                
+        
+        t2 = time()
+        logger.info(f'String data is processed in {round((t2-t1) / 60, 2)} mins')
+                         
         self.final_string_ints = string_df_unique
 
     def merge_all(self):
@@ -321,6 +329,7 @@ class PPI_data:
         all_output_base = self.export_dataframe(temp, "all_ppi_splitted")
       
     def merge_mall(self):
+        t1 = time()
         logger.debug("started merging interactions from all 3 databases (intact, biogrid, string)")
                          
         # select and define fields of intact dataframe
@@ -427,6 +436,8 @@ class PPI_data:
         all_selected_features_df["string_physical_combined_score"] = all_selected_features_df["string_physical_combined_score"].apply(float_to_int)
         
         logger.debug("merged all")
+        t2 = time()
+        logger.info(f'All data is merged and processed in {round((t2-t1) / 60, 2)} mins')
                          
         return all_selected_features_df      
         
