@@ -13,8 +13,8 @@ from pypath.inputs import string
 from pypath.inputs import biogrid
 from pypath.share import curl, settings
 from pypath.inputs import uniprot
-from pypath.utils import mapping
 
+from tqdm import tqdm # progress bar
 
 from biocypher._logger import logger
 from contextlib import ExitStack
