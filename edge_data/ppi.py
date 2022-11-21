@@ -19,6 +19,8 @@ from tqdm import tqdm # progress bar
 from biocypher._logger import logger
 from contextlib import ExitStack
 
+logger.debug(f"Loading module {__name__}.")
+
 parser = argparse.ArgumentParser(description='CROssBAR v2 PPI data retrieval arguments')
 
 parser.add_argument(
