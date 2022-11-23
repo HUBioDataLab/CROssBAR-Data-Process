@@ -141,7 +141,7 @@ class PPI_data:
         intact_df_unique["pubmed_id"].replace("", np.nan, inplace=True) # replace empty string with NaN
         intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "interaction_type"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
-        if self.export_csv:
+        if self.export_csvs:
             intact_output_path = self.export_dataframe(intact_df_unique, "intact")
             logger.info(f'Final IntAct data is written: {intact_output_path}')
 
