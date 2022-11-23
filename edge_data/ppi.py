@@ -71,7 +71,7 @@ class PPI_data:
         Wrapper function to download IntAct data using pypath; used to access
         settings.
             
-        To do: Make make arguments of intact.intact_interactions selectable for user.
+        To do: Make arguments of intact.intact_interactions selectable for user.
         """
                      
         logger.debug("Started downloading IntAct data")
@@ -91,6 +91,13 @@ class PPI_data:
 
 
     def intact_process(self, selected_fields=['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']):
+        """
+        Processor function for IntAct data. It drops duplicate and reciprocal duplicate protein pairs and collects pubmed ids of duplicated pairs.
+        
+        Args:
+            selected_fields: fields to be used in the data.
+            
+        """
         logger.debug("Started processing IntAct data")
         t1 = time()
                          
@@ -100,10 +107,13 @@ class PPI_data:
         # turn list columns to string
         for list_column in ["pubmeds", "methods", "interaction_types"]:
             intact_df[list_column] = [';'.join(map(str, l)) for l in intact_df[list_column]]
-        
+            
+        # add source database info
         intact_df["source"] = "IntAct"
+        # filter selected fields
         intact_df = intact_df[selected_fields]
-        intact_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'intact_pubmed_id', 'intact_score', 'intact_methods', 'intact_interaction_types']
+        # rename columns
+        intact_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'pubmed_id', 'intact_score', 'method', 'interaction_type']
         
         # drop rows if uniprot_a or uniprot_b is not a swiss-prot protein
         intact_df = intact_df[(intact_df["uniprot_a"].isin(self.swissprots)) & (intact_df["uniprot_b"].isin(self.swissprots))]
@@ -118,11 +128,11 @@ class PPI_data:
         intact_df.sort_values(by=['intact_score'], ascending=False, inplace=True)
         intact_df_unique = intact_df.dropna(subset=["uniprot_a", "uniprot_b"]).reset_index(drop=True)
         intact_df_unique = intact_df_unique.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first", "uniprot_b":"first", 
-                                                    "intact_pubmed_id": lambda x: "|".join([str(e) for e in set(x.dropna())]),
-                                                   "intact_score":"first", "intact_methods":"first", 
-                                                    "intact_interaction_types":"first"})
+                                                    "pubmed_id": lambda x: "|".join([str(e) for e in set(x.dropna())]),
+                                                   "intact_score":"first", "method":"first", 
+                                                    "interaction_type":"first"})
         intact_df_unique["intact_pubmed_id"].replace("", np.nan, inplace=True) # replace empty string with NaN
-        intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "intact_interaction_types"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "interaction_type"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         intact_output_path = self.export_dataframe(intact_df_unique, "intact")
         logger.info(f'Final IntAct data is written: {intact_output_path}')
@@ -137,7 +147,7 @@ class PPI_data:
         Wrapper function to download BioGRID data using pypath; used to access
         settings.
             
-        To do: Make make arguments of intact.intact_interactions selectable for user. 
+        To do: Make arguments of biogrid.biogrid_all_interactions selectable for user. 
         """
         
              
@@ -164,6 +174,14 @@ class PPI_data:
                          
 
     def biogrid_process(self, selected_fields=['source', 'uniprot_a', 'uniprot_b', 'pmid', 'experimental_system']):
+        """
+        Processor function for BioGRID data. It drops duplicate and reciprocal duplicate protein pairs and collects pubmed ids of duplicated pairs. In addition, it
+        maps entries to uniprot ids using gene name and tax id information in the BioGRID data.
+        
+        Args:
+            selected_fields: fields to be used in the data.            
+        """
+        
         logger.debug("Started processing BioGRID data")
 
         t1 = time()
@@ -199,10 +217,12 @@ class PPI_data:
         biogrid_df["uniprot_a"] = prot_a_uniprots
         biogrid_df["uniprot_b"] = prot_b_uniprots
         
-        # select columns for future use
+        # add source database info
         biogrid_df["source"] = "BioGRID"
+        # filter selected fields
         biogrid_df = biogrid_df[selected_fields]
-        biogrid_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'biogrid_pubmed_id', 'biogrid_experimental_system']
+        # rename columns
+        biogrid_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'pubmed_id', 'method']
         
         # drop rows that have semicolon (";")
         biogrid_df.drop(biogrid_df[(biogrid_df["uniprot_a"].str.contains(";")) | (biogrid_df["uniprot_b"].str.contains(";"))].index, axis=0, inplace=True)
@@ -218,13 +238,13 @@ class PPI_data:
         biogrid_df_unique = biogrid_df.dropna(subset=["uniprot_a", "uniprot_b"]).reset_index(drop=True)
         biogrid_df_unique.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first",
                                                                                              "uniprot_b":"first", 
-                                                                                             "biogrid_pubmed_id":lambda x: "|".join([str(e) for e in set(x.dropna())]),
-                                                                                             "biogrid_experimental_system":"first"})
+                                                                                             "pubmed_id":lambda x: "|".join([str(e) for e in set(x.dropna())]),
+                                                                                             "method":"first"})
         biogrid_df_unique["biogrid_pubmed_id"].replace("", np.nan, inplace=True)
-        biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "biogrid_experimental_system"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "method"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         biogrid_output_path = self.export_dataframe(biogrid_df_unique, "biogrid")
-        logger.info(f'Final IntAct data is written: {biogrid_output_path}')
+        logger.info(f'Final BioGRID data is written: {biogrid_output_path}')
 
         self.final_biogrid_ints = biogrid_df_unique
         
@@ -267,16 +287,18 @@ class PPI_data:
                     self.string_ints.extend(organism_string_ints)
             
         t1 = time()
-        logger.info(f'String data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'STRING data is downloaded in {round((t1-t0) / 60, 2)} mins')
                          
 
     def string_process(self, selected_fields=['source', 'uniprot_a', 'uniprot_b', 'combined_score', 'physical_combined_score']):
-        #string_output_base =  os.path.join(self.output_dir, "string")
-        #Path(string_output_base).mkdir(parents=True, exist_ok=True)
-
-        #log_path = os.path.join(string_output_base, "skipped_tax_in_string.log")
-        #logfile = open(log_path, 'w')
+        """
+        Processor function for STRING data. It drops duplicate and reciprocal duplicate protein pairs. In addition, it maps entries to uniprot ids 
+        using crossreferences to STRING in the Uniprot data.
         
+        Args:
+            selected_fields: fields to be used in the data.
+            
+        """
         logger.debug("Started processing STRING data")
         t1 = time()
                          
@@ -304,8 +326,11 @@ class PPI_data:
         string_df["uniprot_a"] = prot_a_uniprots
         string_df["uniprot_b"] = prot_b_uniprots
         
+        # add source database info
         string_df["source"] = "STRING"
+        # filter selected fields
         string_df = string_df[selected_fields]
+        # rename columns
         string_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'string_combined_score', 'string_physical_combined_score']
         
         # filter with swissprot ids
@@ -329,23 +354,17 @@ class PPI_data:
       
     def merge_mall(self):
         t1 = time()
-        logger.debug("started merging interactions from all 3 databases (intact, biogrid, string)")
+        logger.debug("started merging interactions from all 3 databases (IntAct, BioGRID, STRING)")
                          
-        # select and define fields of intact dataframe
-        intact_refined_df_selected_features = self.final_intact_ints.rename(columns={"intact_methods":"method", "intact_interaction_types":"interaction_type", "intact_pubmed_id":"pubmed_id"})
+        # reorder columns of intact dataframe
         intact_refined_df_selected_features = intact_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method", "interaction_type", "intact_score"])
-        intact_refined_df_selected_features["string_combined_score"] = np.nan
-        intact_refined_df_selected_features["string_physical_combined_score"] = np.nan
         
-        # select and define fields of biogrid dataframe
-        biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.rename(columns={"biogrid_experimental_system":"method", "biogrid_pubmed_id":"pubmed_id"})
+        # reorder columns of biogrid dataframe
         biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.reindex(columns=["source","uniprot_a","uniprot_b", "pubmed_id", "method"])
-        biogrid_refined_df_selected_features[["interaction_type", "intact_score", "string_combined_score", "string_physical_combined_score"]] = np.nan
         
-        # select and define fields of string dataframe
-        string_refined_df_selected_features[["pubmed_id", "method", "interaction_type", "intact_score"]] = np.nan
+        # reorder columns of string dataframe
         string_refined_df_selected_features = string_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b",
-        "pubmed_id", "method", "interaction_type", "intact_score", "string_combined_score", "string_physical_combined_score"])
+        "string_combined_score", "string_physical_combined_score"])
         
         # merge intact and biogrid
         intact_plus_biogrid_selected_features_df = pd.merge(intact_refined_df_selected_features, biogrid_refined_df_selected_features,
@@ -381,18 +400,10 @@ class PPI_data:
         
         # drop redundant columns
         intact_plus_biogrid_selected_features_df.drop(columns=["method_x", "method_y"], inplace=True)
-        intact_plus_biogrid_selected_features_df.drop(columns=["interaction_type_y", "intact_score_y", 
-                                                       "string_combined_score_y", "string_physical_combined_score_y"],
-                                             inplace=True)
         
-        # rename and reorder columns
-        intact_plus_biogrid_selected_features_df.rename(columns={"interaction_type_x":"interaction_type", "intact_score_x":"intact_score",
-                                                        "string_combined_score_x":"string_combined_score",
-                                                        "string_physical_combined_score_x":"string_physical_combined_score"},
-                                               inplace=True)        
+        # reorder columns      
         intact_plus_biogrid_selected_features_df = intact_plus_biogrid_selected_features_df.reindex(columns=['source', 'uniprot_a', 'uniprot_b', 'pubmed_id', 
-                                                          'method', 'interaction_type', 'intact_score', 
-                                                          'string_combined_score', 'string_physical_combined_score'])
+                                                          'method', 'interaction_type', 'intact_score'])
         
         logger.debug("merged intact and biogrid")
                          
@@ -403,24 +414,16 @@ class PPI_data:
         self.all_selected_features_df["source"] = self.all_selected_features_df[["source_x", "source_y"]].apply(lambda x: '|'.join(x.dropna()), axis=1)
         
         # drop redundant columns
-        self.all_selected_features_df.drop(columns=["source_x", "source_y"], inplace=True)
-        self.all_selected_features_df.drop(columns=["string_combined_score_x", "string_physical_combined_score_x", "pubmed_id_y",
-                                      "method_y", "interaction_type_y", "intact_score_y"], inplace=True)
+        self.all_selected_features_df.drop(columns=["source_x", "source_y"], inplace=True)       
         
-        
-        # rename and reorder columns
-        self.all_selected_features_df.rename(columns={"interaction_type_x":"interaction_type", "intact_score_x":"intact_score",
-                                        "pubmed_id_x":"pubmed_id", "method_x":"method", 
-                                         "string_combined_score_y":"string_combined_score",
-                                        "string_physical_combined_score_y":"string_physical_combined_score"},
-                                inplace=True)
-
+        # reorder columns
         self.all_selected_features_df = self.all_selected_features_df.reindex(columns=['source', 'uniprot_a', 'uniprot_b', 'pubmed_id', 
                                                           'method', 'interaction_type', 'intact_score', 
                                                           'string_combined_score', 'string_physical_combined_score'])
         
         
         # during the merging, it changes datatypes of some columns from int to float. So it needs to be reverted
+        # However, for future, this may not be case so we can delete this part
         def float_to_int(element):
             if "." in str(element):                
                 dot_index = str(element).index(".")
@@ -445,6 +448,7 @@ if __name__ == "__main__":
     t0 = time() 
     
     args = parser.parse_args()
+    
     ppi_downloader = PPI_data(output_dir=args.output_dir)
     # intact
     ppi_downloader.download_intact_data()
