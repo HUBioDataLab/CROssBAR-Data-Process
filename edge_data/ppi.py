@@ -31,9 +31,10 @@ parser.add_argument(
 
 
 class PPI_data:
-    def __init__(self, output_dir, split_output = False, cache=False, debug=False, retries=6):
+    def __init__(self, export_csvs = False, output_dir, split_output = False, cache=False, debug=False, retries=6):
         """
             Args:
+                export_csv: Flag for whether or not create dataframe of outputs
                 split_csvs: whether or not to split output csv files to multiple parts
                 TODO: add n_rows_in_file setting to config file
                 cache: if True, it uses the cached version of the data, otherwise
@@ -43,6 +44,7 @@ class PPI_data:
         """
 
         Path(output_dir).mkdir(parents=True, exist_ok=True)
+        self.export_csvs = export_csvs
         self.output_dir = output_dir
         self.split_output = split_output
         self.swissprots = list(uniprot._all_uniprots("*", True))
@@ -137,8 +139,9 @@ class PPI_data:
         intact_df_unique["intact_pubmed_id"].replace("", np.nan, inplace=True) # replace empty string with NaN
         intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "interaction_type"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
-        intact_output_path = self.export_dataframe(intact_df_unique, "intact")
-        logger.info(f'Final IntAct data is written: {intact_output_path}')
+        if self.export_csv:
+            intact_output_path = self.export_dataframe(intact_df_unique, "intact")
+            logger.info(f'Final IntAct data is written: {intact_output_path}')
 
         self.final_intact_ints = intact_df_unique
         
@@ -248,8 +251,9 @@ class PPI_data:
         biogrid_df_unique["biogrid_pubmed_id"].replace("", np.nan, inplace=True)
         biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "method"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
-        biogrid_output_path = self.export_dataframe(biogrid_df_unique, "biogrid")
-        logger.info(f'Final BioGRID data is written: {biogrid_output_path}')
+        if self.export_csv:
+            biogrid_output_path = self.export_dataframe(biogrid_df_unique, "biogrid")
+            logger.info(f'Final BioGRID data is written: {biogrid_output_path}')
 
         self.final_biogrid_ints = biogrid_df_unique
         
@@ -353,8 +357,9 @@ class PPI_data:
         t2 = time()
         logger.info(f'STRING data is processed in {round((t2-t1) / 60, 2)} mins')
         
-        string_output_path = self.export_dataframe(string_df_unique, "string")
-        logger.info(f'Final STRING data is written: {string_output_path}')
+        if self.export_csv:
+            string_output_path = self.export_dataframe(string_df_unique, "string")
+            logger.info(f'Final STRING data is written: {string_output_path}')
 
         self.final_string_ints = string_df_unique
 
@@ -453,6 +458,10 @@ class PPI_data:
         logger.debug("merged all interactions")
         t2 = time()
         logger.info(f'All data is merged and processed in {round((t2-t1) / 60, 2)} mins')
+            
+        if self.export_csvs:            
+            all_df_path = self.export_dataframe(self.all_selected_features_df, "ppi_all")
+            logger.info(f'Final STRING data is written: {all_df_path}')
                                  
         
 if __name__ == "__main__":
