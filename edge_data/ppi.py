@@ -42,15 +42,17 @@ class PPI_data:
                 debug: if True, turns on debug mode in pypath.
                 retries: number of retries in case of download error.
         """
-
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        
         self.export_csvs = export_csvs
-        self.output_dir = output_dir
         self.split_output = split_output
         self.swissprots = list(uniprot._all_uniprots("*", True))
         self.cache = cache
         self.debug = debug
         self.retries = retries
+        
+        if export_csvs:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            self.output_dir = output_dir
 
     
     def export_dataframe(self, dataframe, data_label):
