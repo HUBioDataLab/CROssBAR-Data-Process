@@ -92,7 +92,8 @@ class PPI_data:
 
     def intact_process(self, selected_fields=['source', 'id_a', 'id_b', 'pubmeds', 'mi_score', 'methods',  'interaction_types']):
         """
-        Processor function for IntAct data. It drops duplicate and reciprocal duplicate protein pairs and collects pubmed ids of duplicated pairs.
+        Processor function for IntAct data. It drops duplicate and reciprocal duplicate protein pairs and collects pubmed ids of duplicated pairs. Also, it filters
+        protein pairs found in swissprot.
         
         Args:
             selected_fields: fields to be used in the data.
@@ -107,7 +108,9 @@ class PPI_data:
         # turn list columns to string
         for list_column in ["pubmeds", "methods", "interaction_types"]:
             intact_df[list_column] = [';'.join(map(str, l)) for l in intact_df[list_column]]
-            
+        
+        intact_df.fillna(value=np.nan, inplace=True)
+        
         # add source database info
         intact_df["source"] = "IntAct"
         # filter selected fields
@@ -176,7 +179,7 @@ class PPI_data:
     def biogrid_process(self, selected_fields=['source', 'uniprot_a', 'uniprot_b', 'pmid', 'experimental_system']):
         """
         Processor function for BioGRID data. It drops duplicate and reciprocal duplicate protein pairs and collects pubmed ids of duplicated pairs. In addition, it
-        maps entries to uniprot ids using gene name and tax id information in the BioGRID data.
+        maps entries to uniprot ids using gene name and tax id information in the BioGRID data. Also, it filters protein pairs found in swissprot.
         
         Args:
             selected_fields: fields to be used in the data.            
@@ -216,6 +219,8 @@ class PPI_data:
 
         biogrid_df["uniprot_a"] = prot_a_uniprots
         biogrid_df["uniprot_b"] = prot_b_uniprots
+        
+        biogrid_df.fillna(value=np.nan, inplace=True)
         
         # add source database info
         biogrid_df["source"] = "BioGRID"
@@ -257,7 +262,7 @@ class PPI_data:
         Wrapper function to download STRING data using pypath; used to access
         settings.
             
-        To do: Make make arguments of string.string_links_interactions selectable for user.
+        To do: Make arguments of string.string_links_interactions selectable for user.
         """
 
         logger.debug("Started downloading STRING data")
@@ -293,7 +298,7 @@ class PPI_data:
     def string_process(self, selected_fields=['source', 'uniprot_a', 'uniprot_b', 'combined_score', 'physical_combined_score']):
         """
         Processor function for STRING data. It drops duplicate and reciprocal duplicate protein pairs. In addition, it maps entries to uniprot ids 
-        using crossreferences to STRING in the Uniprot data.
+        using crossreferences to STRING in the Uniprot data. Also, it filters protein pairs found in swissprot.
         
         Args:
             selected_fields: fields to be used in the data.
@@ -309,7 +314,7 @@ class PPI_data:
                          
         # create dataframe
         string_df = pd.DataFrame.from_records(self.string_ints, columns=self.string_ints[0]._fields)
-        string_df.fillna(value=np.nan, inplace=True)
+        
                          
         prot_a_uniprots = []
         for protein in string_df['protein_a']:            
@@ -325,6 +330,8 @@ class PPI_data:
                          
         string_df["uniprot_a"] = prot_a_uniprots
         string_df["uniprot_b"] = prot_b_uniprots
+        
+        string_df.fillna(value=np.nan, inplace=True)
         
         # add source database info
         string_df["source"] = "STRING"
