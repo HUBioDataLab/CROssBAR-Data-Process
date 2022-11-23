@@ -34,7 +34,7 @@ class PPI_data:
     def __init__(self, export_csvs = False, output_dir, split_output = False, cache=False, debug=False, retries=6):
         """
             Args:
-                export_csv: Flag for whether or not create dataframe of outputs
+                export_csv: Flag for whether or not create csvs of outputs
                 split_csvs: whether or not to split output csv files to multiple parts
                 TODO: add n_rows_in_file setting to config file
                 cache: if True, it uses the cached version of the data, otherwise
