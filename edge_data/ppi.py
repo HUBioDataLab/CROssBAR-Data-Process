@@ -443,7 +443,9 @@ class PPI_data:
 if __name__ == "__main__":
     
     t0 = time() 
-    ppi_downloader = PPI_data(output_dir=args.output_dir, n_rows_in_file=args.n_rows_in_file)
+    
+    args = parser.parse_args()
+    ppi_downloader = PPI_data(output_dir=args.output_dir)
     # intact
     ppi_downloader.download_intact_data()
     ppi_downloader.intact_process()
