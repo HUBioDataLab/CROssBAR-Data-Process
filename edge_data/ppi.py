@@ -352,7 +352,7 @@ class PPI_data:
                          
         # drop duplicates if same a x b pair exists in b x a format
         # keep the one with the highest combined score
-        string_df.sort_values(by=['combined_score'], ascending=False, inplace=True)
+        string_df.sort_values(by=['string_combined_score'], ascending=False, inplace=True)
         string_df_unique = string_df.dropna(subset=["uniprot_a", "uniprot_b"]).drop_duplicates(subset=["uniprot_a", "uniprot_b"], keep="first").reset_index(drop=True)
         string_df_unique = string_df_unique[~string_df_unique[["uniprot_a", "uniprot_b", "string_combined_score"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
