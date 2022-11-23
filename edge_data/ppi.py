@@ -301,9 +301,9 @@ class PPI_data:
         using crossreferences to STRING in the Uniprot data. Also, it filters protein pairs found in swissprot.
         
         Args:
-            selected_fields: fields to be used in the data.
-            
+            selected_fields: fields to be used in the data.            
         """
+        
         logger.debug("Started processing STRING data")
         t1 = time()
                          
@@ -360,6 +360,11 @@ class PPI_data:
 
       
     def merge_mall(self):
+        """
+        Merge function for all 3 databases. Merges dataframe according to uniprot_a and uniprot_b (i.e., protein pairs) columns.
+                  
+        """
+        
         t1 = time()
         logger.debug("started merging interactions from all 3 databases (IntAct, BioGRID, STRING)")
                          
@@ -367,7 +372,7 @@ class PPI_data:
         intact_refined_df_selected_features = intact_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method", "interaction_type", "intact_score"])
         
         # reorder columns of biogrid dataframe
-        biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.reindex(columns=["source","uniprot_a","uniprot_b", "pubmed_id", "method"])
+        biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method"])
         
         # reorder columns of string dataframe
         string_refined_df_selected_features = string_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b",
@@ -412,7 +417,7 @@ class PPI_data:
         intact_plus_biogrid_selected_features_df = intact_plus_biogrid_selected_features_df.reindex(columns=['source', 'uniprot_a', 'uniprot_b', 'pubmed_id', 
                                                           'method', 'interaction_type', 'intact_score'])
         
-        logger.debug("merged intact and biogrid")
+        logger.debug("merged intact and biogrid interactions")
                          
         # merge intact+biogrid with string
         self.all_selected_features_df = pd.merge(intact_plus_biogrid_selected_features_df, string_refined_df_selected_features, on=["uniprot_a", "uniprot_b"], how="outer")
@@ -445,7 +450,7 @@ class PPI_data:
         # then revert back them
         self.all_selected_features_df["string_physical_combined_score"] = self.all_selected_features_df["string_physical_combined_score"].apply(float_to_int)
         
-        logger.debug("merged all")
+        logger.debug("merged all interactions")
         t2 = time()
         logger.info(f'All data is merged and processed in {round((t2-t1) / 60, 2)} mins')
                                  
