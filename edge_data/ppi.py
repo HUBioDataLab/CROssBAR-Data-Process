@@ -376,12 +376,15 @@ class PPI_data:
         logger.debug("started merging interactions from all 3 databases (IntAct, BioGRID, STRING)")
                          
         # reorder columns of intact dataframe
+        intact_refined_df_selected_features = self.final_intact_ints
         intact_refined_df_selected_features = intact_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method", "interaction_type", "intact_score"])
         
         # reorder columns of biogrid dataframe
+        biogrid_refined_df_selected_features = self.final_biogrid_ints
         biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method"])
         
         # reorder columns of string dataframe
+        string_refined_df_selected_features = self.final_string_ints
         string_refined_df_selected_features = string_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b",
         "string_combined_score", "string_physical_combined_score"])
         
