@@ -280,7 +280,7 @@ class PPI_data:
             string_species = string.string_species()
             self.tax_ids = list(string_species.keys())
         
-            #map string ids to swissprot ids
+            # map string ids to swissprot ids
             self.uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
                     
             self.string_ints = []
