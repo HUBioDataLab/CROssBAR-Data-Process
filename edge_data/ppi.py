@@ -127,7 +127,7 @@ class PPI_data:
         intact_df.reset_index(drop=True, inplace=True)
         
         # assing pubmed ids that contain unassigned to NaN value 
-        intact_df["intact_pubmed_id"].loc[intact_df["intact_pubmed_id"].astype(str).str.contains("unassigned", na=False)] = np.nan
+        intact_df["pubmed_id"].loc[intact_df["pubmed_id"].astype(str).str.contains("unassigned", na=False)] = np.nan
         
         # drop duplicates if same a x b pair exists multiple times 
         # keep the pair with the highest score and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
@@ -138,7 +138,7 @@ class PPI_data:
                                                     "pubmed_id": lambda x: "|".join([str(e) for e in set(x.dropna())]),
                                                    "intact_score":"first", "method":"first", 
                                                     "interaction_type":"first"})
-        intact_df_unique["intact_pubmed_id"].replace("", np.nan, inplace=True) # replace empty string with NaN
+        intact_df_unique["pubmed_id"].replace("", np.nan, inplace=True) # replace empty string with NaN
         intact_df_unique = intact_df_unique[~intact_df_unique[["uniprot_a", "uniprot_b", "interaction_type"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         if self.export_csvs:
@@ -250,7 +250,7 @@ class PPI_data:
                                                                                              "uniprot_b":"first", 
                                                                                              "pubmed_id":lambda x: "|".join([str(e) for e in set(x.dropna())]),
                                                                                              "method":"first"})
-        biogrid_df_unique["biogrid_pubmed_id"].replace("", np.nan, inplace=True)
+        biogrid_df_unique["pubmed_id"].replace("", np.nan, inplace=True)
         biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "method"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         if self.export_csvs:
@@ -365,9 +365,9 @@ class PPI_data:
                          
         # drop duplicates if same a x b pair exists in b x a format
         # keep the one with the highest combined score
-        string_df.sort_values(by=['combined_score'], ascending=False, inplace=True)
+        string_df.sort_values(by=['string_combined_score'], ascending=False, inplace=True)
         string_df_unique = string_df.dropna(subset=["uniprot_a", "uniprot_b"]).drop_duplicates(subset=["uniprot_a", "uniprot_b"], keep="first").reset_index(drop=True)
-        string_df_unique = string_df_unique[~string_df_unique[["uniprot_a", "uniprot_b", "combined_score"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        string_df_unique = string_df_unique[~string_df_unique[["uniprot_a", "uniprot_b", "string_combined_score"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         t2 = time()
         logger.info(f'STRING data is processed in {round((t2-t1) / 60, 2)} mins')
@@ -389,12 +389,15 @@ class PPI_data:
         logger.debug("started merging interactions from all 3 databases (IntAct, BioGRID, STRING)")
                          
         # reorder columns of intact dataframe
+        intact_refined_df_selected_features = self.final_intact_ints
         intact_refined_df_selected_features = intact_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method", "interaction_type", "intact_score"])
         
         # reorder columns of biogrid dataframe
+        biogrid_refined_df_selected_features = self.final_biogrid_ints
         biogrid_refined_df_selected_features = biogrid_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b", "pubmed_id", "method"])
         
         # reorder columns of string dataframe
+        string_refined_df_selected_features = self.final_string_ints
         string_refined_df_selected_features = string_refined_df_selected_features.reindex(columns=["source", "uniprot_a", "uniprot_b",
         "string_combined_score", "string_physical_combined_score"])
         
