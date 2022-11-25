@@ -15,7 +15,6 @@ class InterPro:
         pass
 
 
-
     def download_domain_data(
         self, cache=False, debug=False, retries=3,
     ):
@@ -92,33 +91,5 @@ class InterPro:
                 self.protein_domain_edges.append((uniprot_id, interpro_id, 'has', {'locations': annotation.locations})) # TODO delete this row after checking data and keep only self.edge_list.append() row
                 self.edge_list.append((None, uniprot_id, interpro_id, 'has', {'locations': annotation.locations}))
 
-        # DOMAIN-FUNCTION EDGES
-        interpro2go = interpro.interpro_xrefs(db_type = 'go') # returns dict of interpro ids as keys and go term annotations as values
-        goa = go.GOAnnotation()
-        _go = goa.ontology
-        go_aspect_dict = _go.aspect
 
-        domain_function_label_dict = {
-            'P': 'involved_in',
-            'F': 'enables',
-            'C': 'located_in',
-        }
-
-        self.domain_function_edges = []
-        for k, v in interpro2go.items():
-            if v:
-                for go_term in v:
-                    aspect = go_aspect_dict.get(go_term)
-                    edge_label = domain_function_label_dict.get(aspect)
-                    interpro_id = normalize_curie("interpro:" + k)
-                    go_id = normalize_curie("go:" + go_term)
-                    self.domain_function_edges.append((interpro_id, go_id, edge_label)) # TODO delete this row after checking data and keep only self.edge_list.append() row
-                    self.edge_list.append((None, interpro_id, go_id, edge_label, {}))
-
-    
-
-
-        
-    
-
-
+        # DOMAIN-FUNCTION EDGES will be in the Gene Ontology adapter
