@@ -302,10 +302,11 @@ class PPI_data:
                 if tax in tax_ids_to_be_skipped:
                     continue
                 else:
-                    organism_string_ints = [i for i in string.string_links_interactions(ncbi_tax_id=int(tax), score_threshold="high_confidence")]
-
                     # remove proteins that does not have swissprot ids
-                    organism_string_ints = [i for i in organism_string_ints if i.protein_a in self.string_to_uniprot and i.protein_b in self.string_to_uniprot]
+                    organism_string_ints = [
+                        i for i in string.string_links_interactions(ncbi_tax_id=int(tax), score_threshold="high_confidence")
+                        if i.protein_a in self.string_to_uniprot and i.protein_b in self.string_to_uniprot
+                        ]
                     
                     logger.debug(f"Downloaded STRING data with taxonomy id {str(tax)}")
 
