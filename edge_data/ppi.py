@@ -31,10 +31,10 @@ parser.add_argument(
 
 
 class PPI_data:
-    def __init__(self, export_csvs = False, output_dir, split_output = False, cache=False, debug=False, retries=6):
+    def __init__(self, output_dir, export_csvs = False, split_output = False, cache=False, debug=False, retries=6):
         """
             Args:
-                export_csv: Flag for whether or not create csvs of outputs
+                export_csvs: Flag for whether or not create csvs of outputs
                 split_csvs: whether or not to split output csv files to multiple parts
                 TODO: add n_rows_in_file setting to config file
                 cache: if True, it uses the cached version of the data, otherwise
@@ -253,7 +253,7 @@ class PPI_data:
         biogrid_df_unique["pubmed_id"].replace("", np.nan, inplace=True)
         biogrid_df_unique = biogrid_df_unique[~biogrid_df_unique[["uniprot_a", "uniprot_b", "method"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
-        if self.export_csv:
+        if self.export_csvs:
             biogrid_output_path = self.export_dataframe(biogrid_df_unique, "biogrid")
             logger.info(f'Final BioGRID data is written: {biogrid_output_path}')
 
@@ -271,7 +271,6 @@ class PPI_data:
         To do: Make arguments of string.string_links_interactions selectable for user.
         """
 
-        logger.debug("Started downloading STRING data")
         t0 = time()
 
         with ExitStack() as stack:
@@ -287,15 +286,32 @@ class PPI_data:
             self.tax_ids = list(string_species.keys())
         
             # map string ids to swissprot ids
-            self.uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
-                    
-            self.string_ints = []
-            for tax in tqdm(self.tax_ids):                         
-                organism_string_ints = [i for i in string.string_links_interactions(ncbi_tax_id=int(tax), score_threshold="high_confidence")]
-                logger.debug(f"Downloaded STRING data with taxonomy id {str(tax)}")
+            uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
+            
+            self.string_to_uniprot = collections.defaultdict(list)
+            for k,v in uniprot_to_string.items():
+                for string_id in list(filter(None, v.split(";"))):
+                    self.string_to_uniprot[string_id.split(".")[1]].append(k)
 
-                if organism_string_ints:
-                    self.string_ints.extend(organism_string_ints)
+            self.string_ints = []
+            
+            logger.debug("Started downloading STRING data")
+
+            tax_ids_to_be_skipped = ['4565', ]
+            for tax in tqdm(self.tax_ids):
+                if tax in tax_ids_to_be_skipped:
+                    continue
+                else:
+                    # remove proteins that does not have swissprot ids
+                    organism_string_ints = [
+                        i for i in string.string_links_interactions(ncbi_tax_id=int(tax), score_threshold="high_confidence")
+                        if i.protein_a in self.string_to_uniprot and i.protein_b in self.string_to_uniprot
+                        ]
+                    
+                    logger.debug(f"Downloaded STRING data with taxonomy id {str(tax)}")
+
+                    if organism_string_ints:
+                        self.string_ints.extend(organism_string_ints)
             
         t1 = time()
         logger.info(f'STRING data is downloaded in {round((t1-t0) / 60, 2)} mins')
@@ -312,26 +328,23 @@ class PPI_data:
         
         logger.debug("Started processing STRING data")
         t1 = time()
-                         
-        string_to_uniprot = collections.defaultdict(list)
-        for k,v in self.uniprot_to_string.items():
-            for string_id in list(filter(None, v.split(";"))):
-                string_to_uniprot[string_id.split(".")[1]].append(k)
-                         
+                                                  
         # create dataframe
         string_df = pd.DataFrame.from_records(self.string_ints, columns=self.string_ints[0]._fields)
         
                          
         prot_a_uniprots = []
         for protein in string_df['protein_a']:            
-            id_a= (";".join(string_to_uniprot[protein])
-                   if protein in string_to_uniprot else None)
+            id_a= (";".join(self.string_to_uniprot[protein]))
+                   # if protein in self.string_to_uniprot else None) 
+                   # now that we filtered interactions in line 307, we should not get KeyError here
             prot_a_uniprots.append(id_a)
                          
         prot_b_uniprots = []
         for protein in string_df['protein_b']:            
-            id_b= (";".join(string_to_uniprot[protein])
-                   if protein in string_to_uniprot else None)
+            id_b= (";".join(self.string_to_uniprot[protein]))
+                   # if protein in self.string_to_uniprot else None)
+                   # now that we filtered interactions in line 307, we should not get KeyError here
             prot_b_uniprots.append(id_b)
                          
         string_df["uniprot_a"] = prot_a_uniprots
@@ -347,8 +360,9 @@ class PPI_data:
         string_df.columns = ['source', 'uniprot_a', 'uniprot_b', 'string_combined_score', 'string_physical_combined_score']
         
         # filter with swissprot ids
-        string_df = string_df[(string_df["uniprot_a"].isin(self.swissprots)) & (string_df["uniprot_b"].isin(self.swissprots))]
-        string_df.reset_index(drop=True, inplace=True)
+        # we already filtered interactions in line 307, we can remove this part or keep it for a double check
+        # string_df = string_df[(string_df["uniprot_a"].isin(self.swissprots)) & (string_df["uniprot_b"].isin(self.swissprots))]
+        # string_df.reset_index(drop=True, inplace=True)
                          
         # drop duplicates if same a x b pair exists in b x a format
         # keep the one with the highest combined score
@@ -359,7 +373,7 @@ class PPI_data:
         t2 = time()
         logger.info(f'STRING data is processed in {round((t2-t1) / 60, 2)} mins')
         
-        if self.export_csv:
+        if self.export_csvs:
             string_output_path = self.export_dataframe(string_df_unique, "string")
             logger.info(f'Final STRING data is written: {string_output_path}')
 
