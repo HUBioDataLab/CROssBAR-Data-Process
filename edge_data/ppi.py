@@ -470,9 +470,11 @@ class PPI_data:
         
         # first make their datatype as string
         self.all_selected_features_df["string_physical_combined_score"] = self.all_selected_features_df["string_physical_combined_score"].astype(str, errors="ignore")
+        self.all_selected_features_df["string_combined_score"] = self.all_selected_features_df["string_combined_score"].astype(str, errors="ignore")
         
         # then revert back them
         self.all_selected_features_df["string_physical_combined_score"] = self.all_selected_features_df["string_physical_combined_score"].apply(float_to_int)
+        self.all_selected_features_df["string_combined_score"] = self.all_selected_features_df["string_combined_score"].apply(float_to_int)
         
         logger.debug("merged all interactions")
         t2 = time()
