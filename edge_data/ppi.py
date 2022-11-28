@@ -246,7 +246,7 @@ class PPI_data:
         # keep the first pair and collect pubmed ids of duplicated a x b pairs in that pair's pubmed id column
         # if a x b pair has same experimental system type with b x a pair, drop b x a pair
         biogrid_df_unique = biogrid_df.dropna(subset=["uniprot_a", "uniprot_b"]).reset_index(drop=True)
-        biogrid_df_unique.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first",
+        biogrid_df_unique = biogrid_df_unique.groupby(["uniprot_a", "uniprot_b"], sort=False, as_index=False).aggregate({"source":"first", "uniprot_a":"first",
                                                                                              "uniprot_b":"first", 
                                                                                              "pubmed_id":lambda x: "|".join([str(e) for e in set(x.dropna())]),
                                                                                              "method":"first"})
