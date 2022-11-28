@@ -296,20 +296,19 @@ class PPI_data:
             self.string_ints = []
             
             logger.debug("Started downloading STRING data")
-
+            
+            # this tax id give an error
             tax_ids_to_be_skipped = ['4565', ]
+            
             for tax in tqdm(self.tax_ids):
-                if tax in tax_ids_to_be_skipped:
-                    continue
-                else:
+                if tax not in tax_ids_to_be_skipped:
                     # remove proteins that does not have swissprot ids
                     organism_string_ints = [
                         i for i in string.string_links_interactions(ncbi_tax_id=int(tax), score_threshold="high_confidence")
-                        if i.protein_a in self.string_to_uniprot and i.protein_b in self.string_to_uniprot
-                        ]
+                        if i.protein_a in self.string_to_uniprot and i.protein_b in self.string_to_uniprot]
                     
                     logger.debug(f"Downloaded STRING data with taxonomy id {str(tax)}")
-
+                    
                     if organism_string_ints:
                         self.string_ints.extend(organism_string_ints)
             
