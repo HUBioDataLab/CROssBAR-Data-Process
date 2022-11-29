@@ -18,6 +18,7 @@ class InterPro:
             forces download.
             debug: if True, turns on debug mode in pypath.
             retries: number of retries in case of download error.
+            page_size: page size of downloaded annotation data
         """
         self.cache = cache
         self.debug = debug
