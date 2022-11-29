@@ -12,9 +12,7 @@ class InterPro:
     """
 
     def __init__(self, cache=False, debug=False, page_size=150, retries=6):
-        """
-        Interpro adapter
-        
+        """        
         Args:
             cache: if True, it uses the cached version of the data, otherwise
             forces download.
