@@ -149,7 +149,7 @@ class InterPro:
         t0 = time()
 
         # DOMAIN-PROTEIN EDGES
-        for k, v in tqdm(interpro_annotations.items()):            
+        for k, v in tqdm(self.interpro_annotations.items()):            
             # k -> uniprot id
             for annotation in v:
                 interpro_id = normalize_curie("interpro:" + annotation.interpro_id)
