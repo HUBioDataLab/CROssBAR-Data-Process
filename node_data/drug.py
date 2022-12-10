@@ -1,8 +1,14 @@
-from pypath.share import curl, settings
-from pypath.inputs import drugbank, drugcentral
+
+from __future__ import annotations
+
+from pypath.share import curl, settings, common
+from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot
 from contextlib import ExitStack
+from typing import Literal
 from bioregistry import normalize_curie
 from tqdm import tqdm
+from time import time
+import collections
 
 class Drug:
     """
@@ -11,8 +17,8 @@ class Drug:
     """
 
     def __init__(self, ):
-
-        pass
+        
+        self.edge_list = []
 
 
     def download_drug_data(
@@ -40,12 +46,14 @@ class Drug:
             if not cache:
                 stack.enter_context(curl.cache_off())
 
+
+            print('Started downloading and processing Drugbank data for drug nodes')
             # Drugbank Object
             drugbank_data = drugbank.DrugbankFull(user = user, passwd = passwd)
             
             # NODES
+            
             self.drugbank_drugs = {}
-
             drugbank_drugs_external_ids = drugbank.drugbank_drugs(user = user, passwd = passwd)
             drugbank_drugs_external_ids = {drug.drugbank: drug._asdict() for drug in drugbank_drugs_external_ids}
             drugbank_external_fields = ['drugbank', 'kegg_compound', 'kegg_drug', 'pubchem_cid', 'pubchem_sid', 'chebi', 'chembl', 'pharmgkb', 'het']
@@ -65,12 +73,78 @@ class Drug:
 
                 del self.drugbank_drugs[drugbank_id]['drugbank_id']
 
+            # print('Started downloading and processing Drug Central data for drug nodes')
             # self.drugcentral_drugs = drugcentral.drugcentral_drugs()
 
             # EDGES
             
             # DRUG-TARGET
+            print('Downloading DTI data: Drugbank')
             self.drugbank_dti = drugbank_data.drugbank_targets_full(fields=['drugbank_id', 'id', 'actions', 'references', 'known_action', 'polypeptide',])
+            # print('Downloading DTI data: Drug Central')
+            # self.drugcentral_dti = 
+            # print('Downloading DTI data: KEGG')
+            # self.kegg_dti = 
+
+            # for stitch we need to iterate through organisms in string db, this will take ~40 hours
+            self.download_stitch_dti_data()
+            # pubchem to drugbank id mapping, stitch returns pubchem CIDs as drug IDs
+            self.db_pubchem_mapping = drugbank.drugbank_mapping(id_type='pubchem_compound', target_id_type='drugbank', user=user, passwd=passwd)
+
+
+    def download_stitch_dti_data(
+            self, 
+            organism: str | list = None, 
+            score_threshold: int | Literal[
+                'highest_confidence',
+                'high_confidence',
+                'medium_confidence',
+                'low_confidence',
+                ] = 'high_confidence', 
+            physical_interaction_score: bool = False # currently this arg doesnt work for organisms other than human. can be fixed if necessary.
+            ):
+        """
+        Wrapper function to download STITCH DTI data using pypath
+            
+        It returns PubChem CIDs as drug IDs and STRING IDs as protein IDs.
+        """
+
+        if organism is None:
+            organism = string.string_species()
+
+        organism = common.to_list(organism)
+
+        # map string ids to swissprot ids
+        uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
+        self.string_to_uniprot = collections.defaultdict(list)
+        for k,v in uniprot_to_string.items():
+            for string_id in list(filter(None, v.split(";"))):
+                self.string_to_uniprot[string_id.split(".")[1]].append(k)
+
+
+        self.stitch_ints = []
+        print("Started downloading STITCH data")
+        t0 = time()
+
+        for tax in tqdm(organism):
+            try:
+                organism_stitch_ints = [
+                    i for i in stitch.stitch_links_interactions(ncbi_tax_id=int(tax), score_threshold=score_threshold, physical_interaction_score= physical_interaction_score)
+                    if i.partner_b in self.string_to_uniprot] # filter with swissprot ids
+
+                # TODO: later engage below print line to biocypher log 
+                # print(f"Downloaded STITCH data with taxonomy id {str(tax)}")
+
+                if organism_stitch_ints:
+                    self.stitch_ints.extend(organism_stitch_ints)
+            
+            except TypeError: #'NoneType' object is not an iterator
+                pass
+                # TODO: later engage below print line to biocypher log 
+                # print(f'Skipped tax id {tax}. This is most likely due to the empty file in database. Check the database file anyway.')
+
+        t1 = time()
+        print(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
 
 
     def get_drug_nodes(self):
@@ -89,12 +163,10 @@ class Drug:
             self.node_list.append((drug_id, 'drug', props))
 
 
-    def get_drug_edges(self):
-        self.edge_list = []
-
-        # DRUG-TARGET
-
+    def get_dti_edges(self):
+        
         # drugbank
+        print('Started writing Drugbank DTI')
         self.drugbank_dti_list = [] #remove this after final adjustments
         for dti in tqdm(self.drugbank_dti):
             if dti.polypeptide: # filter out targets without uniprot id
@@ -119,13 +191,24 @@ class Drug:
                         self.drugbank_dti_list.append((drug_id, target_id, 'Targets', props))
                         self.edge_list.append((None, drug_id, target_id, 'Targets', props))
 
-                else:
-                    print(type(dti.polypeptide))
-                    break
-                
-        print('Drugbank DTI are written')
 
-        # DRUG-DRUG
+        # stitch
+        print('Started writing STITCH DTI')
+        self.stitch_dti_list = [] #remove this after final adjustments
+
+        for dti in tqdm(self.stitch_ints):
+                
+            drug_id = self.db_pubchem_mapping.get(dti.partner_a)
+            if drug_id:
+                drug_id = normalize_curie('drugbank:' + list(drug_id)[0])
+                # convert string to uniprot id 
+                target_id = normalize_curie('uniprot:' + self.string_to_uniprot[dti.partner_b][0])
+
+                self.stitch_dti_list.append((drug_id, target_id, 'Targets', {'combined_score': dti.combined_score}))
+                self.edge_list.append((None, drug_id, target_id, 'Targets', {'combined_score': dti.combined_score}))
+
+
+    def get_ddi_edges(self):
 
         # drugbank
         self.drugbank_ddi_list = [] #remove this after final adjustments
@@ -136,5 +219,6 @@ class Drug:
                     target_drug_id = normalize_curie('drugbank:' + target)
                     self.drugbank_ddi_list.append((source_drug_id, target_drug_id, 'Interacts_with'))
                     self.edge_list.append((None, source_drug_id, target_drug_id, 'Interacts_with'))
+                    
         print('Drugbank DDI are written')
         
