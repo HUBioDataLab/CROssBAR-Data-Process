@@ -12,6 +12,11 @@ import collections
 
 class Drug:
     """
+    WARNING: Drugbank, Drug Central and STITCH database download urls contain
+        version number/date. Please update this urls (or request an update) in 
+        resources.urls module of the pypath library before using this script
+        in order to access the latest versions of data.
+
     Class that downloads drug data using pypath and reformats it to be ready
     for import into a BioCypher database.
     """
