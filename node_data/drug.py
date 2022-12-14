@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pypath.share import curl, settings, common
-from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot
+from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb
 from contextlib import ExitStack
 from typing import Literal
 from bioregistry import normalize_curie
@@ -21,20 +21,26 @@ class Drug:
     for import into a BioCypher database.
     """
 
-    def __init__(self, ):
-        
+    def __init__(self, drugbank_user, drugbank_passwd):
+        """
+        Args
+            drugbank_user: drugbank username
+            drugbank_passwd: drugbank password
+        """
+
         self.edge_list = []
+        self.user = drugbank_user
+        self.passwd = drugbank_passwd
 
 
     def download_drug_data(
-        self, user, passwd, cache=False, debug=False, retries=3, 
+        self, cache=False, debug=False, retries=3, 
         ):
 
         """
         Wrapper function to download drug data from various databases using pypath.
-        Args:
-            user: drugbank username
-            passwd: drugbank password
+
+        Args
             cache: if True, it uses the cached version of the data, otherwise
             forces download.
             debug: if True, turns on debug mode in pypath.
@@ -51,60 +57,114 @@ class Drug:
             if not cache:
                 stack.enter_context(curl.cache_off())
 
-
-            print('Started downloading and processing Drugbank data for drug nodes')
-            # Drugbank Object
-            drugbank_data = drugbank.DrugbankFull(user = user, passwd = passwd)
             
-            # NODES
-            
-            self.drugbank_drugs = {}
-            drugbank_drugs_external_ids = drugbank.drugbank_drugs(user = user, passwd = passwd)
-            drugbank_drugs_external_ids = {drug.drugbank: drug._asdict() for drug in drugbank_drugs_external_ids}
-            drugbank_external_fields = ['drugbank', 'kegg_compound', 'kegg_drug', 'pubchem_cid', 'pubchem_sid', 'chebi', 'chembl', 'pharmgkb', 'het']            
-            drugbank_drugs_detailed = drugbank_data.drugbank_drugs_full(fields = ['type', 'cas_number', 'name', 'groups', 'general_references', 'atc_codes', 'drug_interactions'])
-
-            all_fields = list(drugbank_drugs_detailed[0]._fields) + drugbank_external_fields
-            for drug in drugbank_drugs_detailed:
-                drugbank_id = drug.drugbank_id
-                temp_dict = (
-                    drug._asdict() | drugbank_drugs_external_ids[drugbank_id]
-                        if drugbank_id in drugbank_drugs_external_ids else
-                    drug._asdict()
-                )
-
-                self.drugbank_drugs[drugbank_id] = {f: temp_dict.get(f, None) for f in all_fields}
-
-                del self.drugbank_drugs[drugbank_id]['drugbank_id']
-                del self.drugbank_drugs[drugbank_id]['drugbank'] 
-
-            print('Started downloading and processing Drug Central data for drug nodes')
-            self.drugcentral_drugs = {}
-            drugcentral_drugs_init = drugcentral.drugcentral_drugs()
-            self.cas_to_drugbank = {value['cas_number']: key for key, value in self.drugbank_drugs.items()}
-            for drug in drugcentral_drugs_init:
-                if drug.cas in self.cas_to_drugbank:
-                    drugbank_id = self.cas_to_drugbank[drug.cas]
-                    self.drugcentral_drugs[drugbank_id] = drug._asdict()
-
-            # EDGES
-            
-            # DRUG-TARGET
-            print('Downloading DTI data: Drugbank')
-            self.drugbank_dti = drugbank_data.drugbank_targets_full(fields=['drugbank_id', 'id', 'actions', 'references', 'known_action', 'polypeptide',])
-            print('Downloading DTI data: Drug Central')
-            self.drugcentral_dti = drugcentral.drugcentral_interactions()
-            # print('Downloading DTI data: KEGG')
-            # self.kegg_dti = 
+            self.download_drugbank_data(self.user, self.passwd)
+            self.download_drugcentral_data() # TODO: we can add organism filter for DTI
+            self.download_dgidb_data(self.user, self.passwd) # TODO: we can add organism filter for DTI
 
             # for stitch we need to iterate through organisms in string db, this will take ~40 hours
-            self.download_stitch_dti_data()
-            # pubchem to drugbank id mapping, stitch returns pubchem CIDs as drug IDs
-            self.db_pubchem_mapping = drugbank.drugbank_mapping(id_type='pubchem_compound', target_id_type='drugbank', user=user, passwd=passwd)
+            self.download_stitch_dti_data(self.user, self.passwd) # TODO: we can add organism filter, score_threshold and physical_interaction_score args
+
+
+    def download_drugbank_data(self, user, passwd):
+
+        """
+        Wrapper function to download DrugBank drug entries, DTI and DDI data using pypath
+        Args
+            user: drugbank username
+            passwd: drugbank password
+        """
+        
+        print('Downloading drug node data: Drugbank')
+        # Drugbank Object
+        self.drugbank_data = drugbank.DrugbankFull(user = user, passwd = passwd)
+
+        # node data
+        drugbank_drugs_external_ids = drugbank.drugbank_drugs(user = user, passwd = passwd)
+        drugbank_drugs_detailed = self.drugbank_data.drugbank_drugs_full(fields = ['type', 'cas_number', 'name', 'groups', 'general_references', 'atc_codes', 'drug_interactions'])
+
+        self.drugbank_drugs = {}
+        drugbank_external_fields = ['drugbank', 'kegg_compound', 'kegg_drug', 'pubchem_cid', 'pubchem_sid', 'chebi', 'chembl', 'pharmgkb', 'het']            
+        all_fields = list(drugbank_drugs_detailed[0]._fields) + drugbank_external_fields
+        
+        drugbank_drugs_external_ids = {drug.drugbank: drug._asdict() for drug in drugbank_drugs_external_ids}
+        for drug in drugbank_drugs_detailed:
+            drugbank_id = drug.drugbank_id
+            temp_dict = (
+                drug._asdict() | drugbank_drugs_external_ids[drugbank_id]
+                    if drugbank_id in drugbank_drugs_external_ids else
+                drug._asdict()
+            )
+
+            self.drugbank_drugs[drugbank_id] = {f: temp_dict.get(f, None) for f in all_fields}
+
+            del self.drugbank_drugs[drugbank_id]['drugbank_id']
+            del self.drugbank_drugs[drugbank_id]['drugbank'] 
+
+        # edge data
+        print('Downloading DTI data: Drugbank')
+        self.drugbank_dti = self.drugbank_data.drugbank_targets_full(fields=['drugbank_id', 'id', 'actions', 'references', 'known_action', 'polypeptide',])
+
+
+
+    def download_drugcentral_data(
+        self,
+        organism: str | int | None = None):
+
+        """
+        Wrapper function to download Drug Central drug entries and DTI data using pypath
+        Args
+            organism: 
+        """
+
+        print('Downloading drug node data: Drug Central')
+        # node data
+        drugcentral_drugs_init = drugcentral.drugcentral_drugs()
+        self.drugcentral_drugs = {}
+        self.cas_to_drugbank = {value['cas_number']: key for key, value in self.drugbank_drugs.items()}
+        for drug in drugcentral_drugs_init:
+            if drug.cas in self.cas_to_drugbank:
+                drugbank_id = self.cas_to_drugbank[drug.cas]
+                self.drugcentral_drugs[drugbank_id] = drug._asdict()
+
+        print('Downloading DTI data: Drug Central')
+
+
+        # edge data
+        self.drugcentral_dti = drugcentral.drugcentral_interactions(organism)
+    
+
+    def download_dgidb_data(self, user, passwd):
+
+        """
+        Wrapper function to download DGIdb DTI data using pypath
+        
+        Args
+            user: drugbank username
+            passwd: drugbank password
+
+        It returns ChEMBL IDs as drug IDs and Entrez Gene IDs as protein IDs.
+        """
+
+        # edge data
+        print('Downloading DTI data: DGIdb')
+        self.dgidb_dti = dgidb.dgidb_interactions()
+
+        # map chembl ids to drugbank ids
+        self.db_chembl_mapping = drugbank.drugbank_mapping(id_type='chembl', target_id_type='drugbank', user=user, passwd=passwd)
+        
+        # map entrez gene ids to swissprot ids
+        uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "*", True)
+        self.entrez_to_uniprot = collections.defaultdict(list)
+        for k,v in uniprot_to_entrez.items():
+            for entrez_id in list(filter(None, v.split(";"))):
+                self.entrez_to_uniprot[entrez_id].append(k)
 
 
     def download_stitch_dti_data(
             self, 
+            user,
+            passwd,
             organism: str | list = None, 
             score_threshold: int | Literal[
                 'highest_confidence',
@@ -112,12 +172,20 @@ class Drug:
                 'medium_confidence',
                 'low_confidence',
                 ] = 'high_confidence', 
-            physical_interaction_score: bool = False # currently this arg doesnt work for organisms other than human. can be fixed if necessary.
+            physical_interaction_score: bool = False, # currently this arg doesnt work for organisms other than human. can be fixed if necessary.
             ):
         """
         Wrapper function to download STITCH DTI data using pypath
-            
-        It returns PubChem CIDs as drug IDs and STRING IDs as protein IDs.
+
+        Args
+            user: drugbank username
+            passwd: drugbank password
+            organism: Name or NCBI Taxonomy IDs of organisms
+            score_threshold: Minimum required interaction score. user can use
+                pre-defined confidence limits or can define a custom value.
+            physical_interaction_score: If True, returns physical interaction scores of interactions.
+
+        Returns PubChem CIDs as drug IDs and STRING IDs as protein IDs.
         """
 
         if organism is None:
@@ -155,7 +223,19 @@ class Drug:
                 # print(f'Skipped tax id {tax}. This is most likely due to the empty file in database. Check the database file anyway.')
 
         t1 = time()
+
+        # mapping to convert pubchem ids to drugbank ids while writing dti edges
+        self.db_pubchem_mapping = drugbank.drugbank_mapping(id_type='pubchem_compound', target_id_type='drugbank', user=user, passwd=passwd)
+        
         print(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
+
+    
+    def download_kegg_data(self):
+        pass
+
+    
+    def download_pharos_data(self):
+        pass
 
 
     def get_drug_nodes(self):
@@ -168,7 +248,7 @@ class Drug:
         print('Started writing drug nodes')
         for k,v in tqdm(self.drugbank_drugs.items()):
             drug_id = normalize_curie('drugbank:' + k)
-            props = v
+            props = {key: None if value == '' else value for key, value in v.items()}
 
             # add mapped drug central id if there is any
             
@@ -181,6 +261,7 @@ class Drug:
             del props['drug_interactions']
 
             self.node_list.append((drug_id, 'drug', props))
+
 
     def get_dti_edges(self):
         
@@ -225,7 +306,28 @@ class Drug:
                     drugcentral_dti_fields = ['target_type', 'act_value', 'act_type', 'relation', 'effect', 'tdl']
                     props = {key: value for key, value in dti._asdict().items() if key in drugcentral_dti_fields}
                     props['source'] = 'Drug Central'
+
                     self.drugcentral_dti_list.append((drug_id, target_id, 'Targets', props))
+                    self.edge_list.append((None, drug_id, target_id, 'Targets', props))
+
+        # dgidb
+        print('Started writing DGIdb DTI')
+        self.dgidb_dti_list = []
+        for dti in tqdm(self.dgidb_dti):
+            if dti.drug_chembl and 'chembl' in dti.drug_chembl:
+                chembl_id = dti.drug_chembl.split('chembl:')[1]
+                entrez_id = dti.entrez
+                drugbank_id = self.db_chembl_mapping.get(chembl_id)
+                uniprot_id = self.entrez_to_uniprot.get(entrez_id)
+                if drugbank_id and uniprot_id:
+                    drug_id = normalize_curie('drugbank:' + list(drugbank_id)[0])
+                    target_id = normalize_curie('uniprot:' + list(uniprot_id)[0])
+
+                    dgidb_dti_fields = ['resource', 'type', 'score', 'pmid']
+                    props = {key: value for key, value in dti._asdict().items() if key in dgidb_dti_fields}
+                    props['source'] = 'DGIdb'
+
+                    self.dgidb_dti_list.append((drug_id, target_id, 'Targets', props))
                     self.edge_list.append((None, drug_id, target_id, 'Targets', props))
 
 
@@ -235,14 +337,13 @@ class Drug:
 
         for dti in tqdm(self.stitch_ints):
                 
-            drug_id = self.db_pubchem_mapping.get(dti.partner_a)
-            if drug_id:
-                drug_id = normalize_curie('drugbank:' + list(drug_id)[0])
-                # convert string to uniprot id 
-                target_id = normalize_curie('uniprot:' + self.string_to_uniprot[dti.partner_b][0])
-
-                self.stitch_dti_list.append((drug_id, target_id, 'Targets', {'combined_score': dti.combined_score}))
-                self.edge_list.append((None, drug_id, target_id, 'Targets', {'combined_score': dti.combined_score}))
+            drugbank_id = self.db_pubchem_mapping.get(dti.partner_a)
+            uniprot_id = self.string_to_uniprot.get(dti.partner_b)
+            if drugbank_id and uniprot_id:
+                drug_id = normalize_curie('drugbank:' + list(drugbank_id)[0])
+                target_id = normalize_curie('uniprot:' + list(uniprot_id)[0])
+                self.stitch_dti_list.append((drug_id, target_id, 'Targets', {'combined_score': dti.combined_score, 'source': 'STITCH'}))
+                self.edge_list.append((None, drug_id, target_id, 'Targets', {'combined_score': dti.combined_score, 'source': 'STITCH'}))
 
 
     def get_ddi_edges(self):
