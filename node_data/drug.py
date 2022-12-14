@@ -61,33 +61,39 @@ class Drug:
             self.drugbank_drugs = {}
             drugbank_drugs_external_ids = drugbank.drugbank_drugs(user = user, passwd = passwd)
             drugbank_drugs_external_ids = {drug.drugbank: drug._asdict() for drug in drugbank_drugs_external_ids}
-            drugbank_external_fields = ['drugbank', 'kegg_compound', 'kegg_drug', 'pubchem_cid', 'pubchem_sid', 'chebi', 'chembl', 'pharmgkb', 'het']
-
-            for k, v in drugbank_drugs_external_ids.items():
-                drugbank_drugs_external_ids[k] = {key: value for key, value in v.items() if key in drugbank_external_fields}
-            
+            drugbank_external_fields = ['drugbank', 'kegg_compound', 'kegg_drug', 'pubchem_cid', 'pubchem_sid', 'chebi', 'chembl', 'pharmgkb', 'het']            
             drugbank_drugs_detailed = drugbank_data.drugbank_drugs_full(fields = ['type', 'cas_number', 'name', 'groups', 'general_references', 'atc_codes', 'drug_interactions'])
 
+            all_fields = list(drugbank_drugs_detailed[0]._fields) + drugbank_external_fields
             for drug in drugbank_drugs_detailed:
-                drugbank_id = drug._asdict()['drugbank_id']
-                self.drugbank_drugs[drugbank_id] = (
+                drugbank_id = drug.drugbank_id
+                temp_dict = (
                     drug._asdict() | drugbank_drugs_external_ids[drugbank_id]
                         if drugbank_id in drugbank_drugs_external_ids else
                     drug._asdict()
                 )
 
-                del self.drugbank_drugs[drugbank_id]['drugbank_id']
+                self.drugbank_drugs[drugbank_id] = {f: temp_dict.get(f, None) for f in all_fields}
 
-            # print('Started downloading and processing Drug Central data for drug nodes')
-            # self.drugcentral_drugs = drugcentral.drugcentral_drugs()
+                del self.drugbank_drugs[drugbank_id]['drugbank_id']
+                del self.drugbank_drugs[drugbank_id]['drugbank'] 
+
+            print('Started downloading and processing Drug Central data for drug nodes')
+            self.drugcentral_drugs = {}
+            drugcentral_drugs_init = drugcentral.drugcentral_drugs()
+            self.cas_to_drugbank = {value['cas_number']: key for key, value in self.drugbank_drugs.items()}
+            for drug in drugcentral_drugs_init:
+                if drug.cas in self.cas_to_drugbank:
+                    drugbank_id = self.cas_to_drugbank[drug.cas]
+                    self.drugcentral_drugs[drugbank_id] = drug._asdict()
 
             # EDGES
             
             # DRUG-TARGET
             print('Downloading DTI data: Drugbank')
             self.drugbank_dti = drugbank_data.drugbank_targets_full(fields=['drugbank_id', 'id', 'actions', 'references', 'known_action', 'polypeptide',])
-            # print('Downloading DTI data: Drug Central')
-            # self.drugcentral_dti = 
+            print('Downloading DTI data: Drug Central')
+            self.drugcentral_dti = drugcentral.drugcentral_interactions()
             # print('Downloading DTI data: KEGG')
             # self.kegg_dti = 
 
@@ -158,15 +164,23 @@ class Drug:
         """
 
         self.node_list = []
-        self.drugbank_node_list = [] #remove this after final adjustments
 
+        print('Started writing drug nodes')
         for k,v in tqdm(self.drugbank_drugs.items()):
             drug_id = normalize_curie('drugbank:' + k)
             props = v
-            del props['drug_interactions']
-            self.drugbank_node_list.append((drug_id, props))
-            self.node_list.append((drug_id, 'drug', props))
 
+            # add mapped drug central id if there is any
+            
+            props['drugcentral'] = (
+                self.drugcentral_drugs[k]['drugcentral']
+                    if k in self.drugcentral_drugs else
+                None
+                )
+
+            del props['drug_interactions']
+
+            self.node_list.append((drug_id, 'drug', props))
 
     def get_dti_edges(self):
         
@@ -181,6 +195,7 @@ class Drug:
                             drug_id = normalize_curie('drugbank:' + dti.drugbank_id)
                             target_id = normalize_curie('uniprot:' + polypeptide[0])
                             props = dti._asdict()
+                            props['source'] = 'DrugBank'
                             del props['drugbank_id']
                             del props['polypeptide']
                             self.drugbank_dti_list.append((drug_id, target_id, 'Targets', props))
@@ -191,10 +206,27 @@ class Drug:
                         drug_id = normalize_curie('drugbank:' + dti.drugbank_id)
                         target_id = normalize_curie('uniprot:' + dti.polypeptide[0])
                         props = dti._asdict()
+                        props['source'] = 'DrugBank'
                         del props['drugbank_id']
                         del props['polypeptide']
                         self.drugbank_dti_list.append((drug_id, target_id, 'Targets', props))
                         self.edge_list.append((None, drug_id, target_id, 'Targets', props))
+
+        # drug central
+        print('Started writing Drug Central DTI')
+        self.drugcentral_dti_list = []
+        for dti in tqdm(self.drugcentral_dti):
+            if dti.drug:
+                if dti.drug.cas in self.cas_to_drugbank:
+                    drugbank_id = self.cas_to_drugbank[dti.drug.cas]
+                    drug_id = normalize_curie('drugbank:' + drugbank_id)
+                    target_id = normalize_curie('uniprot:' + dti.uniprot)
+
+                    drugcentral_dti_fields = ['target_type', 'act_value', 'act_type', 'relation', 'effect', 'tdl']
+                    props = {key: value for key, value in dti._asdict().items() if key in drugcentral_dti_fields}
+                    props['source'] = 'Drug Central'
+                    self.drugcentral_dti_list.append((drug_id, target_id, 'Targets', props))
+                    self.edge_list.append((None, drug_id, target_id, 'Targets', props))
 
 
         # stitch
@@ -222,8 +254,8 @@ class Drug:
                 for target in v['drug_interactions']:
                     source_drug_id = normalize_curie('drugbank:' + k)
                     target_drug_id = normalize_curie('drugbank:' + target)
-                    self.drugbank_ddi_list.append((source_drug_id, target_drug_id, 'Interacts_with'))
-                    self.edge_list.append((None, source_drug_id, target_drug_id, 'Interacts_with'))
+                    self.drugbank_ddi_list.append((source_drug_id, target_drug_id, 'Interacts_with', {'source': 'DrugBank'}))
+                    self.edge_list.append((None, source_drug_id, target_drug_id, 'Interacts_with', {'source': 'DrugBank'}))
                     
         print('Drugbank DDI are written')
         
