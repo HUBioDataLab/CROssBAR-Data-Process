@@ -105,12 +105,14 @@ class GO:
         # PROTEIN-GO EDGES
         # Protein annotation data from ebi.ac.uk/GOA
         self.protein_to_go_edges = []
+        
+        selected_protein_to_go_edge_types = ['located_in', 'enables', 'involved_in', 'is_active_in', 'part_of', 'contributes_to']
         for k, v in tqdm(self.go_annots.items()):
             if k in self.swissprots:
                 protein_id = normalize_curie("uniprot:" + k)
                 for annotation in list(v):
-                    # filter electronic annotations and qualifiers with "NOT" and the ones that not in go ontology
-                    if annotation.go_id in self.go_ontology.aspect.keys() and annotation.evidence_code != 'IEA' and not str(annotation.qualifier).startswith("NOT"): 
+                    # filter electronic annotations and qualifiers that are not in selected_protein_to_go_edge_types and the ones that not in go ontology
+                    if annotation.go_id in self.go_ontology.aspect.keys() and annotation.evidence_code != 'IEA' and str(annotation.qualifier) in selected_protein_to_go_edge_types: 
                         go_id = normalize_curie("go:" + annotation.go_id)
                         edge_label = str(annotation.qualifier).title()
                         props = {
@@ -124,14 +126,17 @@ class GO:
         
         # GO-GO EDGES
         self.go_to_go_edges = []
+        
+        selected_go_to_go_edge_types = ['is_a', 'positively_regulates', 'negatively_regulates', 'part_of']
         for k, v in tqdm(self.go_ontology.ancestors.items()):
             source_go_id = normalize_curie("go:" + k)
             
             for ancestor in list(v):
-                target_go_id = normalize_curie("go:" + ancestor[0])
-                edge_label = str(ancestor[1]).title()
-                self.go_to_go_edges.append((None, source_go_id, target_go_id, edge_label)) # TODO delete this row after checking data and keep only self.edge_list.append() line
-                self.edge_list.append((None, source_go_id, target_go_id, edge_label, {}))
+                if str(ancestor[1]) in selected_go_to_go_edge_types:                    
+                    target_go_id = normalize_curie("go:" + ancestor[0])
+                    edge_label = str(ancestor[1]).title()
+                    self.go_to_go_edges.append((None, source_go_id, target_go_id, edge_label)) # TODO delete this row after checking data and keep only self.edge_list.append() line
+                    self.edge_list.append((None, source_go_id, target_go_id, edge_label, {}))
 
         
         logger.info("Preparing Domain-GO edges.")
