@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pypath.share import curl, settings, common
-from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos
+from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos, ctdbase
 from contextlib import ExitStack
 from typing import Literal
 from bioregistry import normalize_curie
@@ -62,9 +62,10 @@ class Drug:
             self.download_drugcentral_data() # TODO: we can add organism filter for DTI
             self.download_dgidb_data(self.user, self.passwd) # TODO: we can add organism filter for DTI
             self.download_pharos_data()
+            self.download_ctd_data()
 
             # for stitch we need to iterate through organisms in string db, this will take ~40 hours
-            self.download_stitch_dti_data(self.user, self.passwd) # TODO: we can add organism filter, score_threshold and physical_interaction_score args
+            self.download_stitch_data(self.user, self.passwd) # TODO: we can add organism filter, score_threshold and physical_interaction_score args
 
 
     def download_drugbank_data(self, user, passwd):
@@ -109,12 +110,12 @@ class Drug:
 
     def drugcentral_drugbank_mapping(self, user, passwd):
         # cas_to_drugbank = drugbank.drugbank_mapping(id_type='cas', target_id_type='drugbank', user=user, passwd=passwd)
-        cas_to_drugbank = {value['cas_number']: key for key, value in self.drugbank_drugs.items()}
+        self.cas_to_drugbank = {value['cas_number']: key for key, value in self.drugbank_drugs.items()}
         drugcentral_to_cas = drugcentral.drugcentral_mapping(id_type='drugcentral', target_id_type='cas')
         self.drugcentral_to_drugbank = collections.defaultdict(list)
         for k, v in drugcentral_to_cas.items():
-            if list(v)[0] in cas_to_drugbank:
-                self.drugcentral_to_drugbank[k] = cas_to_drugbank[list(v)[0]]
+            if list(v)[0] in self.cas_to_drugbank:
+                self.drugcentral_to_drugbank[k] = self.cas_to_drugbank[list(v)[0]]
 
 
     def download_drugcentral_data(
@@ -179,7 +180,13 @@ class Drug:
         self.pharos_dti = pharos.pharos_targets(ligands=True)
 
 
-    def download_stitch_dti_data(
+    def download_ctd_data(self):
+        
+        print('Downloading DGI data: CTD')
+        self.ctd_dti = ctdbase.ctdbase_relations(relation_type='chemical_gene')
+
+
+    def download_stitch_data(
             self, 
             user,
             passwd,
@@ -365,9 +372,9 @@ class Drug:
                             temp_activity_dict['pubs'] = pubmed_ids
                             activity_list.append(temp_activity_dict)
 
-                        self.pharos_dti_list.append((drug_id, target_id, 'Targets', {'activities': activity_list}))
-                        self.edge_list.append((None, drug_id, target_id, 'Targets', {'activities': activity_list}))
-            
+                        self.pharos_dti_list.append((drug_id, target_id, 'Targets', {'activities': activity_list, 'source': 'Pharos'}))
+                        self.edge_list.append((None, drug_id, target_id, 'Targets', {'activities': activity_list, 'source': 'Pharos'}))
+
         # stitch
         print('Started writing STITCH DTI')
         self.stitch_dti_list = [] #remove this after final adjustments
@@ -383,9 +390,30 @@ class Drug:
                 self.edge_list.append((None, drug_id, target_id, 'Targets', {'combined_score': dti.combined_score, 'source': 'STITCH'}))
 
 
+    def get_dgi_edges(self):
+
+        # ctd
+        print('Started writing CTD DGI')
+        self.ctd_dti_list = [] #remove this after final adjustments
+        drug_edge_list = []
+        for dti in tqdm(self.ctd_dti):
+            drugbank_id = self.cas_to_drugbank.get(dti.CasRN)
+            if dti.InteractionActions and drugbank_id:
+                for interaction in dti.InteractionActions:
+                    if interaction[0] in ['increases', 'decreases'] and interaction[1] == 'expression':
+                        drug_id = normalize_curie('drugbank:' + drugbank_id)
+                        target_id = normalize_curie('entrez:' + dti.GeneID)
+                        edge_label = f'{interaction[0].capitalize()}_{interaction[1]}'
+                        if (drug_id, target_id, edge_label) in drug_edge_list:
+                            continue
+                        drug_edge_list.append((drug_id, target_id, edge_label))
+                        self.ctd_dti_list.append((drug_id, target_id, edge_label, {'pubmed_ids': dti.PubMedIDs, 'source': 'CTD'}))
+                        self.edge_list.append((None, drug_id, target_id, edge_label, {'pubmed_ids': dti.PubMedIDs, 'source': 'CTD'}))
+
     def get_ddi_edges(self):
 
         # drugbank
+        print('Started writing Drugbank DDI')
         self.drugbank_ddi_list = [] #remove this after final adjustments
         for k,v in tqdm(self.drugbank_drugs.items()):
             if v['drug_interactions']:
