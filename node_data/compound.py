@@ -40,6 +40,9 @@ class Compound:
             print('Downloading bioactivities from Chembl database...')
             self.chembl_acts = chembl.chembl_activities(standard_relation='=', )
 
+            print('Downloading document mapping from Chembl database...')
+            self.document_to_pubmed = chembl.chembl_documents()
+
             print('Downloading target mapping from Chembl database...')
             chembl_targets = chembl.chembl_targets()
 
@@ -86,20 +89,23 @@ class Compound:
             if target_uniprot_id:
                 target_id = normalize_curie('uniprot:' + target_uniprot_id)
 
-                # assay info
+                pubmed_id = self.document_to_pubmed.get(act.document)
+                
                 assay = self.assay_dict.get(act.assay_chembl)
                 if assay:
+                    # add only binding assays
                     assay_type = assay.assay_type
                     assay_conf = assay.confidence_score
 
-                props = {
-                    'pchembl': act.pchembl,
-                    'standard_value': act.standard_value,
-                    # 'standard_type': act.standard_type,
-                    'assay_chembl' : act.assay_chembl,
-                    'assay_type' : assay_type,
-                    'assay_conf' : assay_conf,
-                }
+                    props = {
+                        'pchembl': act.pchembl,
+                        'standard_value': act.standard_value,
+                        'standard_type': act.standard_type,
+                        'assay_chembl' : act.assay_chembl,
+                        'assay_type' : assay_type,
+                        'assay_conf' : assay_conf,
+                        'pubmed_id' : pubmed_id,
+                    }
 
-                self.compound_target_edges.append((None, compound_id, target_id, 'Targets', props))
-                self.edges.append((None, compound_id, target_id, 'Targets', props))
+                    self.compound_target_edges.append((None, compound_id, target_id, 'Targets', props))
+                    self.edges.append((None, compound_id, target_id, 'Targets', props))
