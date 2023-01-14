@@ -82,14 +82,13 @@ class Drug:
         self.drugbank_data = drugbank.DrugbankFull(user = user, passwd = passwd)
 
         # node data
-        drugbank_drugs_external_ids = drugbank.drugbank_drugs(user = user, passwd = passwd)
+        drugbank_drugs_external_ids = self.drugbank_data.drugbank_external_ids_full()
         drugbank_drugs_detailed = self.drugbank_data.drugbank_drugs_full(fields = ['type', 'cas_number', 'name', 'groups', 'general_references', 'atc_codes', 'drug_interactions'])
 
         self.drugbank_drugs = {}
-        drugbank_external_fields = ['drugbank', 'kegg_compound', 'kegg_drug', 'pubchem_cid', 'pubchem_sid', 'chebi', 'chembl', 'pharmgkb', 'het']            
+        drugbank_external_fields = ['KEGG Compound', 'KEGG Drug', 'PubChem Compound', 'PubChem Substance', 'ChEBI', 'ChEMBL', 'PharmGKB', 'PDB']            
         all_fields = list(drugbank_drugs_detailed[0]._fields) + drugbank_external_fields
         
-        drugbank_drugs_external_ids = {drug.drugbank: drug._asdict() for drug in drugbank_drugs_external_ids}
         for drug in drugbank_drugs_detailed:
             drugbank_id = drug.drugbank_id
             temp_dict = (
@@ -101,7 +100,6 @@ class Drug:
             self.drugbank_drugs[drugbank_id] = {f: temp_dict.get(f, None) for f in all_fields}
 
             del self.drugbank_drugs[drugbank_id]['drugbank_id']
-            del self.drugbank_drugs[drugbank_id]['drugbank'] 
 
         # edge data
         print('Downloading DTI data: Drugbank')
@@ -266,7 +264,7 @@ class Drug:
         for k,v in tqdm(self.drugbank_drugs.items()):
             drug_id = normalize_curie('drugbank:' + k)
             props = {key: None if value == '' else value for key, value in v.items()}
-
+            props = {'_'.join(key.lower().split(' ')): value for key, value in props.items()}
             # add mapped drug central id if there is any
             
             props['drugcentral'] = (
