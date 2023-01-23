@@ -82,14 +82,14 @@ class GO:
         # create list of nodes
         self.node_list = []
         
-        aspect_to_node_label_dict = {"C":"cellular component", "P":"biological process", "F":"molecular function"}
+        self.aspect_to_node_label_dict = {"C":"cellular component", "P":"biological process", "F":"molecular function"}
         for go_term in tqdm(self.go_ontology.name.keys()): #keys in self.go_ontology.name is current go ids in the ontology
             
             go_id = normalize_curie("go:" + go_term)
 
             node_props = {}
             node_props['name'] = self.go_ontology.name[go_term]
-            label = aspect_to_node_label_dict[self.go_ontology.aspect[go_term]]
+            label = self.aspect_to_node_label_dict[self.go_ontology.aspect[go_term]]
 
             self.node_list.append((go_id, label, node_props))
 
@@ -113,8 +113,10 @@ class GO:
                 for annotation in list(v):
                     # filter electronic annotations and qualifiers that are not in selected_protein_to_go_edge_types and the ones that not in go ontology
                     if annotation.go_id in self.go_ontology.aspect.keys() and annotation.evidence_code != 'IEA' and str(annotation.qualifier) in selected_protein_to_go_edge_types: 
-                        go_id = normalize_curie("go:" + annotation.go_id)
-                        edge_label = str(annotation.qualifier).title()
+                        go_id = normalize_curie("go:" + annotation.go_id)                        
+                        edge_label = "_".join(["protein",
+                                               str(annotation.qualifier).replace(" ","_"),
+                                               self.aspect_to_node_label_dict[self.go_ontology.aspect[annotation.go_id]].replace(" ","_")])
                         props = {
                             'reference': annotation.reference,
                             'evidence_code': annotation.evidence_code,
@@ -132,9 +134,11 @@ class GO:
             source_go_id = normalize_curie("go:" + k)
             
             for ancestor in list(v):
-                if str(ancestor[1]) in selected_go_to_go_edge_types:                    
+                if str(ancestor[1]) in selected_go_to_go_edge_types and str(k) in self.go_ontology.aspect.keys() and ancestor[0] in self.go_ontology.aspect.keys():                    
                     target_go_id = normalize_curie("go:" + ancestor[0])
-                    edge_label = str(ancestor[1]).title()
+                    edge_label = "_".join([self.aspect_to_node_label_dict[self.go_ontology.aspect[k]].replace(" ","_"),
+                                          ancestor[1],
+                                          self.aspect_to_node_label_dict[self.go_ontology.aspect[ancestor[0]]].replace(" ","_")])
                     self.go_to_go_edges.append((None, source_go_id, target_go_id, edge_label)) # TODO delete this row after checking data and keep only self.edge_list.append() line
                     self.edge_list.append((None, source_go_id, target_go_id, edge_label, {}))
 
@@ -143,18 +147,20 @@ class GO:
         
         # DOMAIN-GO EDGES    
         domain_function_label_dict = {
-            'P': 'Involved_in',
-            'F': 'Enables',
-            'C': 'Located_in',
+            'P': 'involved_in',
+            'F': 'enables',
+            'C': 'located_in',
         }
 
         self.domain_to_go_edges = []
         for k, v in tqdm(self.interpro2go.items()):
             if v:
                 for go_term in v:
-                    aspect = self.go_ontology.aspect.get(go_term)
-                    edge_label = domain_function_label_dict.get(aspect)
-                    interpro_id = normalize_curie("interpro:" + k)
-                    go_id = normalize_curie("go:" + go_term)
-                    self.domain_to_go_edges.append((None, interpro_id, go_id, edge_label)) # TODO delete this row after checking data and keep only self.edge_list.append() line
-                    self.edge_list.append((None, interpro_id, go_id, edge_label, {}))
+                    if go_term in self.go_ontology.aspect.keys():                        
+                        aspect = self.go_ontology.aspect.get(go_term)
+                        edge_label = "_".join(["protein_domain", domain_function_label_dict.get(aspect),
+                                              self.aspect_to_node_label_dict[self.go_ontology.aspect[go_term]].replace(" ","_")])
+                        interpro_id = normalize_curie("interpro:" + k)
+                        go_id = normalize_curie("go:" + go_term)
+                        self.domain_to_go_edges.append((None, interpro_id, go_id, edge_label)) # TODO delete this row after checking data and keep only self.edge_list.append() line
+                        self.edge_list.append((None, interpro_id, go_id, edge_label, {}))
