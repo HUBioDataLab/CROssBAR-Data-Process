@@ -88,7 +88,7 @@ class GO:
             go_id = normalize_curie("go:" + go_term)
 
             node_props = {}
-            node_props['name'] = self.go_ontology.name[go_term]
+            node_props['name'] = self.go_ontology.name[go_term].replace("'","").replace("|","")
             label = self.aspect_to_node_label_dict[self.go_ontology.aspect[go_term]]
 
             self.node_list.append((go_id, label, node_props))
