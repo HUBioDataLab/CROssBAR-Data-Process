@@ -11,7 +11,9 @@ from time import time
 import collections
 
 import pandas as pd
+#import modin.pandas as pd
 import numpy as np
+
 
 class Drug:
     """
@@ -34,6 +36,7 @@ class Drug:
         self.edge_list = []
         self.user = drugbank_user
         self.passwd = drugbank_passwd
+
 
 
     def download_drug_data(
@@ -336,7 +339,18 @@ class Drug:
         else:
             middle = round((len(list(element.dropna().index))/2 + 0.00001))
             return element.dropna().values[middle]
-    
+        
+    def merge_source_column(element, joiner="|"):
+        _list = []
+        for e in list(element.dropna().values):
+            if joiner in e:
+                for i in e.split(joiner):
+                    _list.append(i)
+            else:
+                _list.append(e)
+
+        return joiner.join(list(dict.fromkeys(_list).keys()))
+
 
     def download_dgidb_data(self):
 
@@ -488,6 +502,10 @@ class Drug:
         print(f'Chembl DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_chembl_dti_data(self):
+        
+        print('Processing Chembl DTI data')
+        t0 = time()
+        
         mechanism_dict = {i.chembl:i._asdict() for i in self.chembl_mechanisms}
         target_dict = {i.target_chembl_id:i.accession for i in self.chembl_targets}
         assay_dict = {i.assay_chembl_id:i for i in self.chembl_assays if i.assay_type == 'B'}
@@ -523,7 +541,7 @@ class Drug:
         # SORT BY activity_value
         chembl_cti_df.sort_values(by="activity_value", ignore_index=True, inplace=True)
         
-        chembl_dti_df = chembl_cti_df.dropna(subset="drugbank_id", axis=0).reset_index(drop=True)
+        chembl_dti_df = chembl_cti_df.dropna(subset=["drugbank_id"], axis=0).reset_index(drop=True)
 
         self.chembl_dti_duplicate_removed_df = chembl_dti_df.groupby(["uniprot_id", "drugbank_id"], sort=False, as_index=False).aggregate({
                                                                                                    "pchembl":self.get_median,
@@ -540,6 +558,9 @@ class Drug:
                                                                                                    "source":"first"}).replace("", np.nan)
 
         self.chembl_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        
+        t1 = time()
+        print(f'Chembl DTI data is processed in {round((t1-t0) / 60, 2)} mins')
         
         
     def download_ctd_data(self):
@@ -641,8 +662,59 @@ class Drug:
                                                                                            "source":"first"}).replace("", np.nan)
 
         self.stitch_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        
+        
+    def merge_all_dtis(self):
 
-
+        # merge drugbank and chembl dti
+        drugbank_plus_chembl_dti_df = self.drugbank_dti_duplicate_removed_df.merge(self.chembl_dti_duplicate_removed_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        
+        # merge references
+        drugbank_plus_chembl_dti_df["references"] = drugbank_plus_chembl_dti_df[["references_x", "references_y"]].apply(self.aggregate_column_level, axis=1)        aggregate_column_level, axis=1)
+        
+        # merge sources 
+        drugbank_plus_chembl_dti_df["source"] = drugbank_plus_chembl_dti_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        # merge mechanism of action types
+        drugbank_plus_chembl_dti_df["mechanism_of_action_type"] = drugbank_plus_chembl_dti_df[["mechanism_of_action_type_x", "mechanism_of_action_type_y"]].apply(lambda x: str(list(x.dropna())[0]).lower() if list(x.dropna()) else np.nan, axis=1)
+        
+        # drop redundant columns
+        drugbank_plus_chembl_dti_df.drop(columns=["references_x", "references_y", "source_x", "source_y", 
+                                          "mechanism_of_action_type_x", "mechanism_of_action_type_y", 
+                                          ], inplace=True)
+        
+        
+        # merge drugbank+chembl and pharos dti
+        drugbank_plus_chembl_plus_pharos_dti_df = drugbank_plus_chembl_dti_df.merge(self.pharos_dti_duplicate_removed_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        
+        # merge references
+        drugbank_plus_chembl_plus_pharos_dti_df["references"] = drugbank_plus_chembl_plus_pharos_dti_df[["references_x", "references_y"]].apply(
+        self.aggregate_column_level, axis=1)
+        
+        # merge mechanism of action types
+        drugbank_plus_chembl_plus_pharos_dti_df["mechanism_of_action_type"] = drugbank_plus_chembl_plus_pharos_dti_df[["mechanism_of_action_type_x", "mechanism_of_action_type_y"]].apply(
+        lambda x: str(x.dropna().tolist()[0]).lower() if len(x.dropna().tolist())>0 else np.nan, axis=1)
+        
+        # merge activity value
+        drugbank_plus_chembl_plus_pharos_dti_df["activity_value"] = drugbank_plus_chembl_plus_pharos_dti_df[["activity_value_x", "activity_value_y"]].apply(
+        lambda x: x.dropna().tolist()[0] if len(x.dropna().tolist())>0 else np.nan, axis=1)
+        
+        # merge activity type
+        drugbank_plus_chembl_plus_pharos_dti_df["activity_type"] = drugbank_plus_chembl_plus_pharos_dti_df[["activity_type_x", "activity_type_y"]].apply(
+        lambda x: x.dropna().tolist()[0] if len(x.dropna().tolist())>0 else np.nan, axis=1)
+        
+        # merge sources
+        drugbank_plus_chembl_plus_pharos_dti_df["source"] = drugbank_plus_chembl_plus_pharos_dti_df[["source_x", "source_y"]].apply(
+        self.merge_source_column, axis=1)
+        
+        # drop redundant columns
+        drugbank_plus_chembl_plus_pharos_dti_df.drop(columns=["source_x", "source_y", "references_x", "references_y",
+                                                     "activity_value_x", "activity_value_y", "activity_type_x", "activity_type_y",
+                                                      "mechanism_of_action_type_x", "mechanism_of_action_type_y"], inplace=True)
+        
+        # merge drugbank+chembl+pharos and dgidb
+        drugbank_plus_chembl_plus_pharos_plus_dgidb_dti_df = drugbank_plus_chembl_plus_pharos_dti_df.merge(self.dgidb_dti_duplicate_removed_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        
     def get_drug_nodes(self):
         """
         Merges drug node information from different sources. 
