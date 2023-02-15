@@ -6,7 +6,7 @@ from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb,
 from contextlib import ExitStack
 from typing import Literal
 from bioregistry import normalize_curie
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from time import time
 import collections
 
@@ -62,10 +62,10 @@ class Drug:
 
             if not cache:
                 stack.enter_context(curl.cache_off())
-
+            
+            self.download_chembl_dti_data()
             self.download_drugbank_node_data(self.user, self.passwd)
             self.download_drugbank_dti_data()
-            self.download_chembl_dti_data()
             self.download_pharos_dti_data()
             self.download_dgidb_dti_data()
             self.download_stitch_dti_data()
@@ -183,8 +183,14 @@ class Drug:
         print(f'Drugbank DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
 
     def get_external_database_mappings(self, 
-                                       unichem_external_fields: list, 
-                                       drugbank_external_fields: list,):
+                                       unichem_external_fields: list | None = None, 
+                                       drugbank_external_fields: list | None = None,):
+        
+        if not unichem_external_fields:
+            unichem_external_fields = ['zinc', 'chembl', 'bindingdb', 'clinicaltrials', 'chebi', 'pubchem']
+        
+        if not drugbank_external_fields:
+            drugbank_external_fields = ['KEGG Drug', 'RxCUI', 'PharmGKB', 'PDB', 'Drugcentral']
         
         
         # create dictionaries for every unichem external fields
@@ -217,7 +223,7 @@ class Drug:
                 unichem_drugs_id_mappings[k][field_name] = mapping
 
         # get drugcentral mappings
-        cas_to_drugbank = {drug.cas_number:drug.drugbank_id for drug in self.drugbank_drugs_detailed if drug.cas_number}
+        self.cas_to_drugbank = {drug.cas_number:drug.drugbank_id for drug in self.drugbank_drugs_detailed if drug.cas_number}
         drugcentral_to_cas = drugcentral.drugcentral_mapping(id_type='drugcentral', target_id_type='cas')
         
         # create drugbank-drugcentral, drugcentral-drugbank, chembl-drugbank mappings that will be used for the future processes
@@ -227,13 +233,13 @@ class Drug:
         self.drugcentral_to_drugbank = collections.defaultdict(list)
         self.drugbank_to_drugcentral = collections.defaultdict(None)
         for k, v in drugcentral_to_cas.items():
-            if list(v)[0] in cas_to_drugbank and k:
-                self.drugbank_to_drugcentral[cas_to_drugbank[list(v)[0]]] = k
-                self.drugcentral_to_drugbank[k] = cas_to_drugbank[list(v)[0]]
+            if list(v)[0] in self.cas_to_drugbank and k:
+                self.drugbank_to_drugcentral[self.cas_to_drugbank[list(v)[0]]] = k
+                self.drugcentral_to_drugbank[k] = self.cas_to_drugbank[list(v)[0]]
                 
                 # add drugcentral id to drugbank_drugs_external_ids
-                if cas_to_drugbank[list(v)[0]] in self.drugbank_drugs_external_ids:
-                    self.drugbank_drugs_external_ids[cas_to_drugbank[list(v)[0]]]['Drugcentral'] = k
+                if self.cas_to_drugbank[list(v)[0]] in self.drugbank_drugs_external_ids:
+                    self.drugbank_drugs_external_ids[self.cas_to_drugbank[list(v)[0]]]['Drugcentral'] = k
             
         # create final external id mapping dict
         self.drug_mappings_dict = collections.defaultdict(dict)
@@ -365,7 +371,7 @@ class Drug:
             middle = round((len(list(element.dropna().index))/2 + 0.00001))
             return element.dropna().values[middle]
         
-    def merge_source_column(element, joiner="|"):
+    def merge_source_column(self, element, joiner="|"):
         _list = []
         for e in list(element.dropna().values):
             if joiner in e:
@@ -531,15 +537,10 @@ class Drug:
         t0 = time()
                 
         self.chembl_acts = chembl.chembl_activities(standard_relation='=')
-        print("activity is finished")
         self.chembl_document_to_pubmed = chembl.chembl_documents()
-        print("chembl_document_to_pubmed is finished")
         self.chembl_targets = chembl.chembl_targets()
-        print("chembl_targets is finished")
         self.chembl_assays = chembl.chembl_assays()
-        print("chembl_assays is finished")
         self.chembl_mechanisms = chembl.chembl_mechanisms()
-        print("chembl_mechanisms is finished")
         
         t1 = time()
         print(f'Chembl DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
@@ -608,9 +609,71 @@ class Drug:
         
     def download_ctd_data(self):
         
-        print('Downloading DGI data: CTD')
-        self.ctd_dti = ctdbase.ctdbase_relations(relation_type='chemical_gene')
+        print('Downloading CTD DGI data')
+        t0 = time()
+        
+        self.ctd_dgi = ctdbase.ctdbase_relations(relation_type='chemical_gene')
+        
+        t1 = time()
+        print(f'CTD DGI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        
+    def process_ctd_data(self):
+        
+        print('Processing CTD DGI data')
+        t0 = time()
+        
+        df_list = []
+        
+        for cgi in self.ctd_dgi:
+            if cgi.GeneID and cgi.CasRN and any([True if item in [['increases', 'expression'], ['decreases', 'expression']] else False for item in cgi.InteractionActions])\
+            and self.cas_to_drugbank.get(cgi.CasRN, None):
 
+                # if both (increases and decreases expression) of them occur in same InteractionActions field, don't add to list
+                if len([
+                        item for item in cgi.InteractionActions if item in
+                    [['increases', 'expression'], ['decreases', 'expression']]
+                ]) > 1:
+                    continue
+
+                if isinstance(cgi.PubMedIDs, list):
+                    pmid = "|".join(cgi.PubMedIDs)
+                else:
+                    pmid = cgi.PubMedIDs
+
+                interaction_actions = "_".join([
+                    item for item in cgi.InteractionActions if item in
+                    [['increases', 'expression'], ['decreases', 'expression']]
+                ][0])
+                
+                
+                df_list.append(
+                    (cgi.GeneID,
+                     self.cas_to_drugbank.get(cgi.CasRN), 
+                     interaction_actions, 
+                     pmid))
+                
+                
+        ctd_cgi_df = pd.DataFrame(df_list, columns=["entrez_id", "drugbank_id", "action_type", "references"])
+        
+        
+        def detect_conflicting_action_type(element):
+            # if decreases_expression and increases_expression occur in same drug-gene pair, the pair is probably a bad entry
+            if len(set(element.dropna().values)) > 1:
+                return np.nan
+            else:
+                return list(set(element.dropna().values))[0]
+            
+            
+        self.ctd_cgi_duplicate_removed_df = ctd_cgi_df.groupby(["drugbank_id", "entrez_id"], sort=False, as_index=False).aggregate({"entrez_id":"first",
+                                                                                        "drugbank_id":"first",
+                                                                                        "action_type":detect_conflicting_action_type,
+                                                                                        "references":"first"}).replace("", np.nan)
+        
+        self.ctd_cgi_duplicate_removed_df.dropna(subset="action_type", inplace=True)
+        
+        t1 = time()
+        print(f'CTD DGI data is processed in {round((t1-t0) / 60, 2)} mins')
+        
 
     def download_stitch_dti_data(
             self, 
@@ -803,7 +866,7 @@ class Drug:
         drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_dti_df.merge(self.stitch_dti_duplicate_removed_df, how="outer", on=["uniprot_id", "drugbank_id"])
         
         # merge sources
-        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df["source"] = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df[["source_x", "source_y"]].p_apply(
+        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df["source"] = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df[["source_x", "source_y"]].apply(
         self.merge_source_column, axis=1)
         
         # drop redundant columns
@@ -836,10 +899,53 @@ class Drug:
 
 
     def get_dti_edges(self):
-        pass        
+
+        self.dti_edge_list = []
+        
+        print('Started writing DTI edges')
+        for _, row in tqdm(self.all_dti_df.iterrows(), total=self.all_dti_df.shape[0]):
+            
+            _dict = row.to_dict()
+            source = normalize_curie('drugbank:' + _dict["drugbank_id"])
+            target = normalize_curie('uniprot:' +_dict["uniprot_id"])
+
+            del _dict["drugbank_id"] 
+            del _dict["uniprot_id"]
+
+            props = dict()
+            for k, v in _dict.items():
+                if str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                    else:
+                        props[str(k).replace(" ","_").lower()] = v
+
+
+            self.dti_edge_list.append((None, source, target, "targets", props))       
 
     def get_dgi_edges(self):
-        pass        
+        
+        self.dgi_edge_list = []
+        
+        print('Started writing DGI edges')
+        for _, row in tqdm(drug_downloader.ctd_cgi_duplicate_removed_df.iterrows(), total=drug_downloader.ctd_cgi_duplicate_removed_df.shape[0]):
+            _dict = row.to_dict()
+            source = normalize_curie('drugbank:' + _dict["drugbank_id"])
+            target = normalize_curie('ncbigene:' + _dict["entrez_id"])
+
+            del _dict["drugbank_id"] 
+            del _dict["entrez_id"]
+
+            props = dict()
+            for k, v in _dict.items():
+                if str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                    else:
+                        props[str(k).replace(" ","_").lower()] = v
+
+
+            self.dgi_edge_list.append((None, source, target, "targets", props))
 
     def get_ddi_edges(self):
         pass
