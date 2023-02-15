@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pypath.share import curl, settings, common
-from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos, ctdbase, unichem, chembl
+from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos, ctdbase, unichem, chembl, uniprot
 from contextlib import ExitStack
 from typing import Literal
 from bioregistry import normalize_curie
@@ -36,6 +36,8 @@ class Drug:
         self.edge_list = []
         self.user = drugbank_user
         self.passwd = drugbank_passwd
+        
+        self.swissprots = list(uniprot._all_uniprots(organism = '*', swissprot=True))
 
 
 
@@ -551,7 +553,8 @@ class Drug:
         t0 = time()
         
         mechanism_dict = {i.chembl:i._asdict() for i in self.chembl_mechanisms}
-        target_dict = {i.target_chembl_id:i.accession for i in self.chembl_targets}
+        targets = [i for i in self.chembl_targets if i.accession in self.swissprots]
+        target_dict = {i.target_chembl_id:i.accession for i in targets}
         assay_dict = {i.assay_chembl_id:i for i in self.chembl_assays if i.assay_type == 'B'}
         
         df_list = []
