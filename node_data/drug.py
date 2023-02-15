@@ -131,7 +131,7 @@ class Drug:
         
         # inchi and inchikey
         if self.add_inchi or self.add_inchikey:
-            drugbank_properties = self.drugbank_data.drugbank_properties_full()
+            self.drugbank_properties = self.drugbank_data.drugbank_properties_full()
         
         # core properties
         self.drugbank_drugs_detailed = self.drugbank_data.drugbank_drugs_full(fields = fields)
@@ -163,10 +163,10 @@ class Drug:
             self.drugbank_drugs[drugbank_id] = {f: temp_dict.get(f, None) for f in all_fields}
             
             if self.add_inchi:
-                self.drugbank_drugs[drugbank_id]["InChI"] = drugbank_properties.get(drugbank_id, {}).get("InChI", None)
+                self.drugbank_drugs[drugbank_id]["InChI"] = self.drugbank_properties.get(drugbank_id, {}).get("InChI", None)
                 
             if self.add_inchikey:
-                self.drugbank_drugs[drugbank_id]["InChIKey"] = drugbank_properties.get(drugbank_id, {}).get("InChIKey", None)
+                self.drugbank_drugs[drugbank_id]["InChIKey"] = self.drugbank_properties.get(drugbank_id, {}).get("InChIKey", None)
 
             del self.drugbank_drugs[drugbank_id]['drugbank_id']
             
