@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pypath.share import curl, settings
-from pypath.inputs import chembl, uniprot
+from pypath.inputs import chembl, uniprot, unichem
 from contextlib import ExitStack
 from bioregistry import normalize_curie
 
-from tqdm import tqdm
+from time import time
+
+from tqdm.notebook import tqdm
 
 class Compound:
     """
@@ -33,7 +35,9 @@ class Compound:
 
             if not cache:
                 stack.enter_context(curl.cache_off())
-
+            
+            t0 = time()
+            
             print('Downloading compound nodes from Chembl database...')
             self.compounds = chembl.chembl_molecules()
 
@@ -54,58 +58,154 @@ class Compound:
             print('Downloading assays from Chembl database...')
             chembl_assays = chembl.chembl_assays()
             self.assay_dict = {i.assay_chembl_id:i for i in chembl_assays if i.assay_type == 'B'}
+            
+            # chembl to drugbank mapping
+            self.chembl_to_drugbank = unichem.unichem_mapping('chembl', 'drugbank')
+            self.chembl_to_drugbank = {k:list(v)[0] for k, v in self.chembl_to_drugbank.items()}
+            
+            t1 = time()
+            print(f'Chembl data is downloaded in {round((t1-t0) / 60, 2)} mins')            
     
     def get_compound_nodes(self):
         """
         Reformats compound node data to be ready for import into a BioCypher database.
         """
         print('Writing compound nodes...')
-        self.nodes = []
+        
+        # will filter out chembl ids whether they have edge or not
+        activities_chembl = set()
+        for act in self.chembl_acts:
+            if act.assay_chembl in self.assay_dict and all([True if item else False for item in [act.standard_value,
+                                                                                            act.standard_type,
+                                                                                           self.target_dict.get(act.target_chembl, None)]]):
+
+                activities_chembl.add(act.chembl)
+                
+        
+        self.compound_nodes = []
         for compound in tqdm(self.compounds):
-            if compound.chembl:
+            
+            if compound.chembl not in self.chembl_to_drugbank and compound.chembl in activities_chembl:
+                
                 compound_id = normalize_curie('chembl:' + compound.chembl)
                 props = {
-                    'chembl_id': compound.chembl,
                     'type': compound.type,
                     'full_mwt': compound.full_mwt,
                     'species': compound.species,
                     'heavy_atoms': compound.heavy_atoms,
                     'alogp': compound.alogp,
+                    'inchi': compound.std_inchi,
+                    'inchikey': compound.std_inchi_key,
                 }
-                self.nodes.append((compound_id, 'Compound', props))
+                
+                self.compound_nodes.append((compound_id, 'compound', props))
     
-    def get_compound_target_edges(self):
+    
+    def get_median(self, element):
+        return round(float(element.dropna().median()), 3)
+
+    def get_middle_row(self, element):
+        if len(list(element.index)) == 1:
+            return element.values[0]
+        elif len(list(element.dropna().index)) == 0:
+            return np.nan
+        elif len(list(element.dropna().index)) % 2 == 1:
+            middle = len(list(element.dropna().index)) // 2
+            return element.dropna().values[middle]
+        else:
+            middle = round((len(list(element.dropna().index))/2 + 0.00001))
+            return element.dropna().values[middle]
+
+    def aggregate_column_level(self, element, joiner="|"):
+        import numpy as np
+
+        _set = set()
+        for e in set(element.dropna().values):
+            if joiner in e:
+                for i in e.split(joiner):
+                    _set.add(i)
+            else:
+                _set.add(e)
+
+        if _set:
+            return joiner.join(_set)
+        else:
+            return np.nan
+        
+        
+    def process_chembl_cti_data(self):
+        
+        print("Started Chembl processing compound-target interaction data")
+        t0 = time()
+        
+        df_list = []
+        
+        # filter activities
+        for act in self.chembl_acts:
+            if act.assay_chembl in self.assay_dict and act.chembl not in self.chembl_to_drugbank and all([True if item else False for item in [act.standard_value,
+                                                                                            act.standard_type,
+                                                                                           self.target_dict.get(act.target_chembl, None)]]):
+
+                df_list.append((act.chembl, act.pchembl, act.standard_value, act.standard_type, act.assay_chembl, 
+                                self.target_dict.get(act.target_chembl, None), str(self.document_to_pubmed.get(act.document, None)),
+                               self.assay_dict[act.assay_chembl].confidence_score,))
+
+        
+        # create dataframe
+        chembl_cti_df = pd.DataFrame(df_list, columns=["chembl", "pchembl", "activity_value", "activity_type", "assay_chembl", "uniprot_id",
+                                                      "references", "confidence_score"])
+
+        chembl_cti_df.fillna(value=np.nan, inplace=True)
+        chembl_cti_df.replace("None", np.nan, inplace=True)
+
+        # add source
+        chembl_cti_df["source"] = "ChEMBL"
+        
+        # sort by activity value
+        chembl_cti_df.sort_values(by="activity_value", ignore_index=True, inplace=True)
+        
+        # multiple processing
+        self.chembl_cti_duplicate_removed_df = chembl_cti_df.groupby(["uniprot_id", "chembl"], sort=False, as_index=False).aggregate({
+                                                                                           "chembl":"first",
+                                                                                           "pchembl":self.get_median,
+                                                                                           "activity_value":self.get_median,
+                                                                                           "activity_type":self.get_middle_row,
+                                                                                           "assay_chembl":self.aggregate_column_level,
+                                                                                           "uniprot_id":"first",
+                                                                                           "references":self.aggregate_column_level,
+                                                                                           "confidence_score":self.get_middle_row,
+                                                                                           "source":"first"}).replace("", np.nan)
+        
+        self.chembl_cti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        
+        t1 = time()
+        print(f'Chembl data is processed in {round((t1-t0) / 60, 2)} mins') 
+        
+        
+    def get_cti_edges(self):
         """
         Reformats compound-target edge data to be ready for import into a BioCypher database.
         """
 
         print('Writing compound-target edges...')
-        self.edges = []
-        self.compound_target_edges = []
-        for act in tqdm(self.chembl_acts):
-            # ids
-            compound_id = normalize_curie('chembl:' + act.chembl)
-            target_uniprot_id = self.target_dict.get(act.target_chembl)
-            if target_uniprot_id:
-                target_id = normalize_curie('uniprot:' + target_uniprot_id)
+        self.cti_edge_list = []
+        
+        for _, row in tqdm(self.chembl_cti_duplicate_removed_df.iterrows(), total=self.chembl_cti_duplicate_removed_df.shape[0]):
+            
+            _dict = row.to_dict()
+            source = normalize_curie('chembl:' + _dict["chembl"])
+            target = normalize_curie('uniprot:' +_dict["uniprot_id"])
 
-                pubmed_id = self.document_to_pubmed.get(act.document)
-                
-                assay = self.assay_dict.get(act.assay_chembl)
-                if assay:
-                    # add only binding assays
-                    assay_type = assay.assay_type
-                    assay_conf = assay.confidence_score
+            del _dict["chembl"] 
+            del _dict["uniprot_id"]
 
-                    props = {
-                        'pchembl': act.pchembl,
-                        'standard_value': act.standard_value,
-                        'standard_type': act.standard_type,
-                        'assay_chembl' : act.assay_chembl,
-                        'assay_type' : assay_type,
-                        'assay_conf' : assay_conf,
-                        'pubmed_id' : pubmed_id,
-                    }
+            props = dict()
+            for k, v in _dict.items():
+                if str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                    else:
+                        props[str(k).replace(" ","_").lower()] = v
 
-                    self.compound_target_edges.append((None, compound_id, target_id, 'Targets', props))
-                    self.edges.append((None, compound_id, target_id, 'Targets', props))
+
+            self.cti_edge_list.append((None, source, target, "targets", props))
