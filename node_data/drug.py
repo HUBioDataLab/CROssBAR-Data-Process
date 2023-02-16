@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pypath.share import curl, settings, common
 from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos, ctdbase, unichem, chembl, uniprot
+import kegg_local
 from contextlib import ExitStack
 from typing import Literal
 from bioregistry import normalize_curie
@@ -70,6 +71,7 @@ class Drug:
             self.download_drugbank_dti_data()
             self.download_pharos_dti_data()
             self.download_dgidb_dti_data()
+            self.download_kegg_data()
             self.download_stitch_dti_data()
             #self.download_ctd_data()
             
@@ -457,9 +459,51 @@ class Drug:
         t1 = time()
         print(f'Dgidb DTI data is processed in {round((t1-t0) / 60, 2)} mins')
         
-    def download_kegg_data(self):
-        pass
+    def download_kegg_data(
+        self,
+        organism: str | list = "hsa"
+        ):
 
+        """
+        Wrapper function to download KEGG DTI and DDI data using pypath
+
+        Args:
+            organism: KEGG organism code. Default is "hsa" for human.
+                    If None, it downloads DTI data for all organisms in KEGG.
+
+        """
+        
+        # DTI
+        if organism is None:
+            organism = kegg_local._kegg_list('organism')
+        
+        organism = common.to_list(organism)
+
+        print(f'Downloading KEGG DTI data for {len(organism)} organism(s)')
+        t0 = time()
+
+        self.kegg_dti = set()
+
+        for org in tqdm(organism):
+            organism_dti = kegg_local.drug_to_gene(org= org)
+            for k, v in organism_dti.items():
+                if type(v) != str:
+                    for i in v.GeneEntries:
+                        if type(i.uniprot_ids) == str:
+                            self.kegg_dti.add((k, i.uniprot_ids))
+                        else:
+                            for uniprot in i.uniprot_ids:
+                                self.kegg_dti.add((k, uniprot))
+
+        t1 = time()
+        print(f'KEGG DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+
+        # DDI
+        print('Downloading KEGG DDI data, this may take around 12 hours')
+        t0 = time()
+        self.kegg_ddi = kegg_local.drug_to_drug()
+        t1 = time()
+        print(f'KEGG DDI data is downloaded in {round((t1-t0) / 60, 2)} mins')
     
     def download_pharos_dti_data(self):
 
@@ -694,6 +738,7 @@ class Drug:
 
         Args:
             organism: Name or NCBI Taxonomy IDs of organisms
+                If None, DTI for all organisms will be downloaded.
             score_threshold: Minimum required interaction score. user can use
                 pre-defined confidence limits or can define a custom value.
             physical_interaction_score: If True, returns physical interaction scores of interactions.
