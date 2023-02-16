@@ -5,9 +5,12 @@ from pypath.inputs import chembl, uniprot, unichem
 from contextlib import ExitStack
 from bioregistry import normalize_curie
 
+import pandas as pd
+import numpy as np
+
 from time import time
 
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 class Compound:
     """
