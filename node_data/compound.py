@@ -1,7 +1,8 @@
 from __future__ import annotations
+import collections
 
-from pypath.share import curl, settings
-from pypath.inputs import chembl, uniprot, unichem
+from pypath.share import curl, settings, common
+from pypath.inputs import chembl, stitch, uniprot, unichem
 from contextlib import ExitStack
 from bioregistry import normalize_curie
 
@@ -42,9 +43,16 @@ class Compound:
             self.download_chembl_data()
             self.download_stitch_cti_data()
             
+    def process_compound_data(self):
+        
+        self.process_chembl_cti_data()
+        self.process_stitch_cti_data()
+        
+            
     def download_chembl_data(self):
         
         t0 = time()
+        print('Started downloading Chembl data')
             
         self.compounds = chembl.chembl_molecules()
 
@@ -301,16 +309,23 @@ class Compound:
         
         
     def merge_all_ctis(self):
+        
+        print("Started merging Chembl and Stitch CTI (Compound-Target Interaction) data")
+        t0 = time()
+        
         # merge chembl and stitch cti data
         chembl_plus_stitch_cti_df = self.chembl_cti_duplicate_removed_df.merge(self.stitch_cti_duplicate_removed_df, 
                                                                                how="outer", on=["uniprot_id", "chembl"])
         
         # merge source column
         chembl_plus_stitch_cti_df["source"] = chembl_plus_stitch_cti_df[["source_x", "source_y"]].apply(
-        merge_source_column, axis=1)
+        self.merge_source_column, axis=1)
         
         # drop redundant columns
         chembl_plus_stitch_cti_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        t1 = time()        
+        print(f'Chembl and Stitch CTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
         self.all_cti_df = chembl_plus_stitch_cti_df
         
@@ -323,7 +338,7 @@ class Compound:
         print('Writing compound-target edges...')
         self.cti_edge_list = []
         
-        for _, row in tqdm(self.chembl_cti_duplicate_removed_df.iterrows(), total=self.chembl_cti_duplicate_removed_df.shape[0]):
+        for _, row in tqdm(self.all_cti_df.iterrows(), total=self.all_cti_df.shape[0]):
             
             _dict = row.to_dict()
             source = normalize_curie('chembl:' + _dict["chembl"])
