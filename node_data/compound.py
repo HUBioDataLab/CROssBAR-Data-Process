@@ -10,7 +10,7 @@ import numpy as np
 
 from time import time
 
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 class Compound:
     """
@@ -39,36 +39,140 @@ class Compound:
             if not cache:
                 stack.enter_context(curl.cache_off())
             
-            t0 = time()
+            self.download_chembl_data()
+            self.download_stitch_cti_data()
             
-            print('Downloading compound nodes from Chembl database...')
-            self.compounds = chembl.chembl_molecules()
-
-            print('Downloading bioactivities from Chembl database...')
-            self.chembl_acts = chembl.chembl_activities(standard_relation='=', )
-
-            print('Downloading document mapping from Chembl database...')
-            self.document_to_pubmed = chembl.chembl_documents()
-
-            print('Downloading target mapping from Chembl database...')
-            chembl_targets = chembl.chembl_targets()
-
-            # filter out TrEMBL targets
-            swissprots = list(uniprot._all_uniprots(organism = '*', swissprot =True))
-            chembl_targets = [i for i in chembl_targets if i.accession in swissprots]
-            self.target_dict = {i.target_chembl_id: i.accession for i in chembl_targets}
-
-            print('Downloading assays from Chembl database...')
-            chembl_assays = chembl.chembl_assays()
-            self.assay_dict = {i.assay_chembl_id:i for i in chembl_assays if i.assay_type == 'B'}
+    def download_chembl_data(self):
+        
+        t0 = time()
             
-            # chembl to drugbank mapping
-            self.chembl_to_drugbank = unichem.unichem_mapping('chembl', 'drugbank')
-            self.chembl_to_drugbank = {k:list(v)[0] for k, v in self.chembl_to_drugbank.items()}
+        self.compounds = chembl.chembl_molecules()
+
+        self.chembl_acts = chembl.chembl_activities(standard_relation='=', )
+
+        self.document_to_pubmed = chembl.chembl_documents()
+
+        chembl_targets = chembl.chembl_targets()
+
+        # filter out TrEMBL targets
+        swissprots = list(uniprot._all_uniprots(organism = '*', swissprot =True))
+        chembl_targets = [i for i in chembl_targets if i.accession in swissprots]
+        self.target_dict = {i.target_chembl_id: i.accession for i in chembl_targets}
+
+        chembl_assays = chembl.chembl_assays()
+        self.assay_dict = {i.assay_chembl_id:i for i in chembl_assays if i.assay_type == 'B'}
             
-            t1 = time()
-            print(f'Chembl data is downloaded in {round((t1-t0) / 60, 2)} mins')            
+        # chembl to drugbank mapping
+        self.chembl_to_drugbank = unichem.unichem_mapping('chembl', 'drugbank')
+        self.chembl_to_drugbank = {k:list(v)[0] for k, v in self.chembl_to_drugbank.items()}
+            
+        t1 = time()
+        print(f'Chembl data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        
     
+    def download_stitch_cti_data(
+            self, 
+            organism: str | list = "9606", 
+            score_threshold: int | Literal[
+                'highest_confidence',
+                'high_confidence',
+                'medium_confidence',
+                'low_confidence',
+                ] = 'high_confidence', 
+            physical_interaction_score: bool = False, # currently this arg doesnt work for organisms other than human. can be fixed if necessary.
+            ):
+        
+        
+        if organism is None:
+            organism = string.string_species()
+            
+        organism = common.to_list(organism)
+        
+        print("Started downloading STITCH data")
+        t0 = time()
+        
+        # map string ids to swissprot ids
+        uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
+        self.string_to_uniprot = collections.defaultdict(list)
+        for k,v in uniprot_to_string.items():
+            for string_id in list(filter(None, v.split(";"))):
+                self.string_to_uniprot[string_id.split(".")[1]].append(k)
+                
+                
+        chembl_to_pubchem = unichem.unichem_mapping("chembl", "pubchem")
+        self.pubchem_to_chembl = dict()
+        for k, v in chembl_to_pubchem.items():
+            if len(v) > 1:
+                for value in list(v):
+                    self.pubchem_to_chembl[value] = k
+            else:
+                self.pubchem_to_chembl[list(v)[0]] = k
+                
+                
+        drugbank_to_pubchem = unichem.unichem_mapping("drugbank", "pubchem")
+        self.pubchem_to_drugbank = dict()
+        for k, v in drugbank_to_pubchem.items():
+            if len(v) > 1:
+                for value in list(v):
+                    self.pubchem_to_drugbank[value] = k
+            else:
+                self.pubchem_to_drugbank[list(v)[0]] = k
+                
+                
+        self.stitch_ints = []
+        for tax in tqdm(organism):
+            try:
+                organism_stitch_ints = [
+                    i for i in stitch.stitch_links_interactions(ncbi_tax_id=int(tax), score_threshold=score_threshold, physical_interaction_score= physical_interaction_score)
+                    if i.partner_b in self.string_to_uniprot and i.partner_a in self.pubchem_to_drugbank and i.partner_a not in self.pubchem_to_drugbank] # filter with swissprot ids
+
+                # TODO: later engage below print line to biocypher log 
+                # print(f"Downloaded STITCH data with taxonomy id {str(tax)}")
+
+                if organism_stitch_ints:
+                    self.stitch_ints.extend(organism_stitch_ints)
+            
+            except TypeError: #'NoneType' object is not an iterator
+                pass
+                # TODO: later engage below print line to biocypher log 
+                # print(f'Skipped tax id {tax}. This is most likely due to the empty file in database. Check the database file.')
+
+
+        t1 = time()        
+        print(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        
+    def process_stitch_cti_data(self):
+        
+        print("Started processing STITCH data")
+        t0 = time()
+        
+        df_list = []
+        for cti in self.stitch_ints:
+            df_list.append((self.pubchem_to_chembl[cti.partner_a], self.string_to_uniprot[cti.partner_b][0], cti.combined_score))
+
+
+        stitch_cti_df = pd.DataFrame(df_list, columns=["chembl", "uniprot_id", "stitch_combined_score"])
+
+        stitch_cti_df.fillna(value=np.nan, inplace=True)
+
+        # add source
+        stitch_cti_df["source"] = "STITCH"
+        
+        # sort by stitch_combined_score
+        stitch_cti_df.sort_values(by="stitch_combined_score", ignore_index=True, inplace=True, ascending=False)
+        
+        self.stitch_cti_duplicate_removed_df = stitch_cti_df.groupby(["chembl", "uniprot_id"], sort=False, as_index=False).aggregate({
+                                                                                           "chembl":"first",
+                                                                                           "uniprot_id":"first",
+                                                                                           "stitch_combined_score":self.get_median, 
+                                                                                           "source":"first"}).replace("", np.nan)
+
+        
+        self.stitch_cti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        
+        t1 = time()        
+        print(f'STITCH data is processed in {round((t1-t0) / 60, 2)} mins')
+        
     def get_compound_nodes(self):
         """
         Reformats compound node data to be ready for import into a BioCypher database.
@@ -135,6 +239,17 @@ class Compound:
         else:
             return np.nan
         
+    def merge_source_column(self, element, joiner="|"):
+        _list = []
+        for e in list(element.dropna().values):
+            if joiner in e:
+                for i in e.split(joiner):
+                    _list.append(i)
+            else:
+                _list.append(e)
+
+        return joiner.join(list(dict.fromkeys(_list).keys()))
+        
         
     def process_chembl_cti_data(self):
         
@@ -182,7 +297,22 @@ class Compound:
         self.chembl_cti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()
-        print(f'Chembl data is processed in {round((t1-t0) / 60, 2)} mins') 
+        print(f'Chembl data is processed in {round((t1-t0) / 60, 2)} mins')
+        
+        
+    def merge_all_ctis(self):
+        # merge chembl and stitch cti data
+        chembl_plus_stitch_cti_df = self.chembl_cti_duplicate_removed_df.merge(self.stitch_cti_duplicate_removed_df, 
+                                                                               how="outer", on=["uniprot_id", "chembl"])
+        
+        # merge source column
+        chembl_plus_stitch_cti_df["source"] = chembl_plus_stitch_cti_df[["source_x", "source_y"]].apply(
+        merge_source_column, axis=1)
+        
+        # drop redundant columns
+        chembl_plus_stitch_cti_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        self.all_cti_df = chembl_plus_stitch_cti_df
         
         
     def get_cti_edges(self):
