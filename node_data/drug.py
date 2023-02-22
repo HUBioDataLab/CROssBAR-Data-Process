@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pypath.share import curl, settings, common
-from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos, ctdbase, unichem, chembl, uniprot
+from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos, ctdbase, unichem, chembl, uniprot, ddinter
 import kegg_local
 from contextlib import ExitStack
 from typing import Literal
@@ -66,24 +66,40 @@ class Drug:
             if not cache:
                 stack.enter_context(curl.cache_off())
             
+            # DTI
             self.download_chembl_dti_data()
             self.download_drugbank_node_data(self.user, self.passwd)
             self.download_drugbank_dti_data()
             self.download_pharos_dti_data()
             self.download_dgidb_dti_data()
-            self.download_kegg_data()
+            self.download_kegg_dti_data()
             self.download_stitch_dti_data()
-            #self.download_ctd_data()
+            
+            # DDI
+            self.download_kegg_ddi_data()
+            self.download_ddinter_ddi_data()
+            
+            # DGI
+            self.download_ctd_data()
             
     
     def process_drug_data(self):
         
+        # DTI
         self.process_drugbank_node_data()
         self.process_drugbank_dti_data()
         self.process_chembl_dti_data()
         self.process_pharos_dti_data()
         self.process_dgidb_dti_data()
         self.process_stitch_dti_data()
+        self.process_kegg_dti_data()
+        
+        # DDI
+        self.process_kegg_ddi_data()
+        self.process_ddinter_ddi_data()
+        
+        # DGI
+        self.process_ctd_data()
         
 
     def download_drugbank_node_data(self, user, passwd, drugbank_node_fields=['InChI', 'InChIKey', 'cas_number', 'name', 'groups', 
@@ -233,6 +249,9 @@ class Drug:
         # create drugbank-drugcentral, drugcentral-drugbank, chembl-drugbank mappings that will be used for the future processes
         chembl_to_drugbank = unichem.unichem_mapping('chembl', 'drugbank')
         self.chembl_to_drugbank = {k:list(v)[0] for k, v in chembl_to_drugbank.items()}
+        
+        # create kegg-drugbank mapping
+        self.kegg_to_drugbank = {v['KEGG Drug']:k for k, v in self.drugbank_drugs_external_ids.items() if v.get('KEGG Drug', None)}
         
         self.drugcentral_to_drugbank = collections.defaultdict(list)
         self.drugbank_to_drugcentral = collections.defaultdict(None)
@@ -459,7 +478,7 @@ class Drug:
         t1 = time()
         print(f'Dgidb DTI data is processed in {round((t1-t0) / 60, 2)} mins')
         
-    def download_kegg_data(
+    def download_kegg_dti_data(
         self,
         organism: str | list = "hsa"
         ):
@@ -485,32 +504,157 @@ class Drug:
         self.kegg_dti = set()
 
         for org in tqdm(organism):
-            organism_dti = kegg_local.drug_to_gene(org= org)
+            organism_dti = kegg_local.drug_to_gene(org = org)
             for k, v in organism_dti.items():
-                if type(v) != str:
-                    for i in v.GeneEntries:
-                        if type(i.uniprot_ids) == str:
-                            self.kegg_dti.add((k, i.uniprot_ids))
+                if self.kegg_to_drugbank.get(k, None) and not isinstance(v, str):
+                    drugbank_id = self.kegg_to_drugbank[k]
+                    for gene_entry in v.GeneEntries:
+                        if isinstance(gene_entry.uniprot_ids, (tuple, list, set)):
+                            for uniprot_id in list(gene_entry.uniprot_ids):
+                                if uniprot_id in self.swissprots:
+                                    self.kegg_dti.add((drugbank_id, uniprot_id))
                         else:
-                            for uniprot in i.uniprot_ids:
-                                self.kegg_dti.add((k, uniprot))
-
+                            if str(gene_entry.uniprot_ids) in self.swissprots:
+                                self.kegg_dti.add((drugbank_id, gene_entry.uniprot_ids))
+                                
+        
+        self.kegg_dti = list(self.kegg_dti)
+        
         t1 = time()
         print(f'KEGG DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        
+        
+    def process_kegg_dti_data(self):
+        
+        print(f'Processing KEGG DTI data')
+        t0 = time()
 
+        self.kegg_dti_df = pd.DataFrame(self.kegg_dti, columns=["drugbank_id", "uniprot_id"])
+
+        self.kegg_dti_df["source"] = "Kegg"
+        
+        t1 = time()
+        print(f'KEGG DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+        
+    def download_kegg_ddi_data(self, from_csv=True):
         # DDI
         print('Downloading KEGG DDI data, this may take around 12 hours')
         t0 = time()
-        self.kegg_ddi = kegg_local.drug_to_drug()
+        if from_csv:
+            print("Skipping to processing part")
+        else:
+            self.kegg_ddi_data = kegg_local.drug_to_drug()
         t1 = time()
         print(f'KEGG DDI data is downloaded in {round((t1-t0) / 60, 2)} mins')
-    
+        
+    def process_kegg_ddi_data(self, from_csv=True):
+        
+        print('Processing KEGG DDI data')
+        t0 = time()
+        
+        if from_csv:
+            # even with cache it takes a lot of time to download kegg ddi data. To interfere that, processed
+            # version of it saved in a csv file
+            self.kegg_ddi_duplicate_removed_df = pd.read_csv('kegg_ddi_duplicate_removed_df.csv')
+        else:
+            
+            kegg_ddi = set()
+            for k, v in self.kegg_ddi_data.items():
+                if self.kegg_to_drugbank.get(k, None) and not isinstance(v, str):
+                    drug1_drugbank_id = self.kegg_to_drugbank[k]
+                    if v.interactions:
+                        for interaction in list(v.interactions):
+                            if interaction.type == "drug" and interaction.id and self.kegg_to_drugbank.get(interaction.id, None):                    
+                                drug2_drugbank_id = self.kegg_to_drugbank[interaction.id]
+                                                                
+                                if interaction.contraindication:                        
+                                    contraindication = "contraindication"
+                                else:
+                                    contraindication = ""
+
+                                if interaction.precaution:                        
+                                    precaution = "precaution"
+                                else:
+                                    precaution = ""
+
+                                if contraindication and precaution:
+                                    interaction_type = "|".join([contraindication, precaution])
+                                else:                        
+                                    interaction_type = contraindication or precaution
+
+
+                                kegg_ddi.add((drug1_drugbank_id, drug2_drugbank_id, interaction_type))
+
+
+            kegg_ddi_df = pd.DataFrame(list(kegg_ddi), columns=["drug1", "drug2", "interaction_type"])
+            
+            kegg_ddi_df.replace("", np.nan, inplace=True)
+
+            kegg_ddi_df["source"] = "Kegg"
+
+            self.kegg_ddi_duplicate_removed_df = kegg_ddi_df[~kegg_ddi_df[["drug1", "drug2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+
+        t1 = time()
+        print(f'KEGG DDI data is processed in {round((t1-t0) / 60, 2)} mins')
+            
+            
+    def download_ddinter_ddi_data(self):
+        
+        print('Downloading DDInter DDI data')
+        t0 = time()
+        
+        ddinter_mappings = ddinter.get_all_mappings()
+        
+        self.ddinter_to_drugbank = {mapping.ddinter_id:mapping.drugbank for mapping in ddinter_mappings if mapping.drugbank}
+        
+        self.ddinter_interactions = ddinter.get_all_interactions()
+        
+        t1 = time()
+        print(f'DDInter DDI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        
+    def process_ddinter_ddi_data(self):
+        
+        print('Processing DDInter DDI data')
+        t0 = time()
+        
+        df_list = []
+        for interaction in self.ddinter_interactions:
+            if self.ddinter_to_drugbank.get(interaction.drug1_id, None) and self.ddinter_to_drugbank.get(interaction.drug2_id, None):
+                if isinstance(interaction.level, tuple):
+                    if len(interaction.level) > 1:
+                        level = "|".join(list(interaction.level))
+                    else:
+                        level = list(interaction.level)[0]
+                else:
+                    level = interaction.level
+
+                if isinstance(interaction.actions, tuple):
+                    if len(interaction.actions) > 1:
+                        actions = "|".join(list(interaction.actions))
+                    else:
+                        actions = list(interaction.actions)[0]
+                else:
+                    actions = interaction.actions
+
+                df_list.append((self.ddinter_to_drugbank[interaction.drug1_id], self.ddinter_to_drugbank[interaction.drug2_id],
+                               level, actions))
+                
+        ddinter_df = pd.DataFrame(df_list, columns=["drug1", "drug2", "interaction_level", "interaction_type"])
+
+        ddinter_df["source"] = "DDInter"
+        
+        self.ddinter_duplicate_removed_df = ddinter_df[~ddinter_df[["drug1", "drug2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        
+        t1 = time()
+        print(f'DDInter DDI data is processed in {round((t1-t0) / 60, 2)} mins')
+        
     def download_pharos_dti_data(self):
 
         print('Downloading Pharos DTI data')
         t0 = time()
         
         self.pharos_dti = pharos.pharos_targets(ligands=True)
+        
         t1 = time()
         print(f'Pharos DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
     
@@ -749,6 +893,9 @@ class Drug:
             organism = string.string_species()
 
         organism = common.to_list(organism)
+        
+        print("Started downloading STITCH data")
+        t0 = time()
 
         # map string ids to swissprot ids
         uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
@@ -777,9 +924,6 @@ class Drug:
                 else:
                     self.pubchem_to_drugbank[list(v)[0]] = k
         
-        
-        print("Started downloading STITCH data")
-        t0 = time()
         
         self.stitch_ints = []
 
@@ -937,8 +1081,46 @@ class Drug:
         t1 = time()        
         print(f'Drugbank+Chembl+Pharos+Dgidb and Stitch DTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
+        print("Started merging Drugbank+Chembl+Pharos+Dgidb+Stitch and Kegg DTI data")
+        t0 = time()
+        
+        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df.merge(self.kegg_dti_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        
+        # merge sources
+        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df["source"] = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df[["source_x", "source_y"]].apply(
+        self.merge_source_column, axis=1)
+        
+        # drop redundant columns
+        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        t1 = time()        
+        print(f'Drugbank+Chembl+Pharos+Dgidb+Stitch and Kegg DTI data is merged in {round((t1-t0) / 60, 2)} mins')
+        
         # create self object from final dataframe
-        self.all_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df
+        self.all_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df
+        
+        
+    def merge_all_ddis(self):
+        
+        print("Started merging Kegg and DDInter DDI data")
+        t0 = time()
+
+        # merge kegg and ddinter ddi data
+        kegg_plus_ddinter_ddi_df = self.kegg_ddi_duplicate_removed_df.merge(self.ddinter_duplicate_removed_df, how="outer", on=["drug1", "drug2"])
+        
+        # merge source columns
+        kegg_plus_ddinter_ddi_df["source"] = kegg_plus_ddinter_ddi_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        # merge interaction type columns
+        kegg_plus_ddinter_ddi_df["interaction_type"] = kegg_plus_ddinter_ddi_df[["interaction_type_x", "interaction_type_y"]].apply(self.aggregate_column_level, axis=1)
+        
+        # drop redundant columns
+        kegg_plus_ddinter_ddi_df.drop(columns=["source_x", "source_y", "interaction_type_x", "interaction_type_y"], inplace=True)
+        
+        t1 = time()        
+        print(f'Kegg and DDInter DDI data is merged in {round((t1-t0) / 60, 2)} mins')
+        
+        self.all_ddi_df = kegg_plus_ddinter_ddi_df
         
     def get_drug_nodes(self):
         """
@@ -960,19 +1142,18 @@ class Drug:
             self.node_list.append((drug_id, 'drug', props))
 
 
-    def get_dti_edges(self):
+    def get_dti_edges(self, early_stopping=500):
 
         self.dti_edge_list = []
         
         print('Started writing DTI edges')
-        for _, row in tqdm(self.all_dti_df.iterrows(), total=self.all_dti_df.shape[0]):
+        for index, row in tqdm(self.all_dti_df.iterrows(), total=self.all_dti_df.shape[0]):
             
             _dict = row.to_dict()
             source = normalize_curie('drugbank:' + _dict["drugbank_id"])
             target = normalize_curie('uniprot:' +_dict["uniprot_id"])
 
-            del _dict["drugbank_id"] 
-            del _dict["uniprot_id"]
+            del _dict["drugbank_id"], _dict["uniprot_id"]
 
             props = dict()
             for k, v in _dict.items():
@@ -983,21 +1164,24 @@ class Drug:
                         props[str(k).replace(" ","_").lower()] = v
 
 
-            self.dti_edge_list.append((None, source, target, "targets", props))       
+            self.dti_edge_list.append((None, source, target, "targets", props))
+            
+            if early_stopping and (index+1) == early_stopping:
+                break
 
-    def get_dgi_edges(self):
+    def get_dgi_edges(self, early_stopping=500):
         
         self.dgi_edge_list = []
         
         print('Started writing DGI edges')
-        for _, row in tqdm(drug_downloader.ctd_cgi_duplicate_removed_df.iterrows(), total=drug_downloader.ctd_cgi_duplicate_removed_df.shape[0]):
+        for index, row in tqdm(self.ctd_cgi_duplicate_removed_df.iterrows(), total=self.ctd_cgi_duplicate_removed_df.shape[0]):
             _dict = row.to_dict()
             source = normalize_curie('drugbank:' + _dict["drugbank_id"])
             target = normalize_curie('ncbigene:' + _dict["entrez_id"])
+            label = "_".join(["drug", _dict["action_type"], "gene"])
 
-            del _dict["drugbank_id"] 
-            del _dict["entrez_id"]
-
+            del _dict["drugbank_id"], _dict["entrez_id"], _dict["action_type"]
+            
             props = dict()
             for k, v in _dict.items():
                 if str(v) != "nan":
@@ -1007,7 +1191,35 @@ class Drug:
                         props[str(k).replace(" ","_").lower()] = v
 
 
-            self.dgi_edge_list.append((None, source, target, "targets", props))
+            self.dgi_edge_list.append((None, source, target, label, props))
+            
+            if early_stopping and (index+1) == early_stopping:
+                break
 
-    def get_ddi_edges(self):
-        pass
+    def get_ddi_edges(self, early_stopping=500):
+        self.ddi_edge_list = []
+        
+        print('Started writing DGI edges')
+        
+        for index, row in tqdm(self.all_ddi_df.iterrows(), total=self.all_ddi_df.shape[0]):
+            _dict = row.to_dict()
+            
+            source = normalize_curie('drugbank:' + _dict["drug1"])
+            target = normalize_curie('drugbank:' + _dict["drug2"])
+            
+            del _dict["drug1"], _dict["drug2"]
+            
+            props = dict()
+            for k, v in _dict.items():
+                if str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                    else:
+                        props[str(k).replace(" ","_").lower()] = v
+
+
+            self.ddi_edge_list.append((None, source, target, "drug_interacts_with_drug", props))
+            
+            if early_stopping and (index+1) == early_stopping:
+                break
+                
