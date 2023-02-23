@@ -556,6 +556,7 @@ class Drug:
             # even with cache it takes a lot of time to download kegg ddi data. To interfere that, processed
             # version of it saved in a csv file
             self.kegg_ddi_duplicate_removed_df = pd.read_csv('kegg_ddi_duplicate_removed_df.csv')
+            self.kegg_ddi_duplicate_removed_df.rename(columns={'interaction_type':'recommendation'}, inplace=True)
         else:
             
             kegg_ddi = set()
@@ -586,7 +587,7 @@ class Drug:
                                 kegg_ddi.add((drug1_drugbank_id, drug2_drugbank_id, interaction_type))
 
 
-            kegg_ddi_df = pd.DataFrame(list(kegg_ddi), columns=["drug1", "drug2", "interaction_type"])
+            kegg_ddi_df = pd.DataFrame(list(kegg_ddi), columns=["drug1", "drug2", "recommendation"])
             
             kegg_ddi_df.replace("", np.nan, inplace=True)
 
@@ -689,7 +690,7 @@ class Drug:
                                             pubmeds, self.drugcentral_to_drugbank.get(synonyms.get("DrugCentral", None), None)))
 
         pharos_dti_df = pd.DataFrame(df_list, columns=["uniprot_id", "activity_type", "mechanism_of_action_type", 
-                                                       "activity_value", "references", "drugbank_id"])
+                                                       "pchembl", "references", "drugbank_id"])
 
         pharos_dti_df.fillna(value=np.nan, inplace=True)
         pharos_dti_df.replace("", np.nan, inplace=True)
@@ -702,7 +703,7 @@ class Drug:
         pharos_dti_df.dropna(axis=0, subset="drugbank_id", inplace=True)
         
         # Sort by activity_value
-        pharos_dti_df.sort_values(by="activity_value", ignore_index=True, inplace=True)
+        pharos_dti_df.sort_values(by="pchembl", ignore_index=True, inplace=True)
         
         # For every drug-target pair instance the preprocess as follows:
         # - get middle row for activity_type and mechanism_of_action_type
@@ -711,7 +712,7 @@ class Drug:
         self.pharos_dti_duplicate_removed_df = pharos_dti_df.groupby(["uniprot_id", "drugbank_id"], sort=False, as_index=False).aggregate({"uniprot_id":"first",
                                                                                               "activity_type":self.get_middle_row,
                                                                                               "mechanism_of_action_type":self.get_middle_row,
-                                                                                              "activity_value":self.get_median,
+                                                                                              "pchembl":self.get_median,
                                                                                         "references":self.aggregate_column_level,
                                                                                         "drugbank_id":"first",
                                                                                         "source":"first"}).replace("", np.nan)
@@ -1021,8 +1022,8 @@ class Drug:
         drugbank_plus_chembl_plus_pharos_dti_df["mechanism_of_action_type"] = drugbank_plus_chembl_plus_pharos_dti_df[["mechanism_of_action_type_x", "mechanism_of_action_type_y"]].apply(
         lambda x: str(x.dropna().tolist()[0]).lower() if len(x.dropna().tolist())>0 else np.nan, axis=1)
         
-        # merge activity value
-        drugbank_plus_chembl_plus_pharos_dti_df["activity_value"] = drugbank_plus_chembl_plus_pharos_dti_df[["activity_value_x", "activity_value_y"]].apply(
+        # merge pchembl
+        drugbank_plus_chembl_plus_pharos_dti_df["pchembl"] = drugbank_plus_chembl_plus_pharos_dti_df[["pchembl_x", "pchembl_y"]].apply(
         lambda x: x.dropna().tolist()[0] if len(x.dropna().tolist())>0 else np.nan, axis=1)
         
         # merge activity type
@@ -1035,7 +1036,7 @@ class Drug:
         
         # drop redundant columns
         drugbank_plus_chembl_plus_pharos_dti_df.drop(columns=["source_x", "source_y", "references_x", "references_y",
-                                                     "activity_value_x", "activity_value_y", "activity_type_x", "activity_type_y",
+                                                     "pchembl_x", "pchembl_y", "activity_type_x", "activity_type_y",
                                                       "mechanism_of_action_type_x", "mechanism_of_action_type_y"], inplace=True)
         
         t1 = time()        
@@ -1111,11 +1112,8 @@ class Drug:
         # merge source columns
         kegg_plus_ddinter_ddi_df["source"] = kegg_plus_ddinter_ddi_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
         
-        # merge interaction type columns
-        kegg_plus_ddinter_ddi_df["interaction_type"] = kegg_plus_ddinter_ddi_df[["interaction_type_x", "interaction_type_y"]].apply(self.aggregate_column_level, axis=1)
-        
         # drop redundant columns
-        kegg_plus_ddinter_ddi_df.drop(columns=["source_x", "source_y", "interaction_type_x", "interaction_type_y"], inplace=True)
+        kegg_plus_ddinter_ddi_df.drop(columns=["source_x", "source_y"], inplace=True)
         
         t1 = time()        
         print(f'Kegg and DDInter DDI data is merged in {round((t1-t0) / 60, 2)} mins')
