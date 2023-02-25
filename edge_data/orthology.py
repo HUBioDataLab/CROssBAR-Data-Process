@@ -188,10 +188,6 @@ class Orthology:
         logger.debug("Started merged OMA and Pharos orthology data")
         t0 = time()
         
-        self.oma_orthology_duplicate_removed_df
-        
-        self.pharos_orthology_duplicate_removed_df
-        
         oma_plus_pharos_orthology_df = self.oma_orthology_duplicate_removed_df.merge(self.pharos_orthology_duplicate_removed_df, how="outer",
                                                                        on=["uniprot_a", "uniprot_b"])
         
