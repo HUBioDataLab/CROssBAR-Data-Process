@@ -11,7 +11,7 @@ import numpy as np
 
 from time import time
 
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 class Compound:
     """
@@ -203,6 +203,11 @@ class Compound:
             if compound.chembl not in self.chembl_to_drugbank and compound.chembl in activities_chembl:
                 
                 compound_id = normalize_curie('chembl:' + compound.chembl)
+                if compound.qed_weighted:
+                    qed_score = float(compound.qed_weighted)
+                else:
+                    qed_score = compound.qed_weighted
+                    
                 props = {
                     'type': compound.type,
                     'full_mwt': compound.full_mwt,
@@ -211,6 +216,8 @@ class Compound:
                     'alogp': compound.alogp,
                     'inchi': compound.std_inchi,
                     'inchikey': compound.std_inchi_key,
+                    'qed_score': qed_score,
+                    'structure_type': compound.structure_type,
                 }
                 
                 self.compound_nodes.append((compound_id, 'compound', props))
@@ -344,9 +351,7 @@ class Compound:
             source = normalize_curie('chembl:' + _dict["chembl"])
             target = normalize_curie('uniprot:' +_dict["uniprot_id"])
 
-            del _dict["chembl"] 
-            del _dict["uniprot_id"]
-
+            del _dict["chembl"], _dict["uniprot_id"]
             props = dict()
             for k, v in _dict.items():
                 if str(v) != "nan":
