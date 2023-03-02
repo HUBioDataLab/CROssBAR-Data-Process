@@ -11,7 +11,7 @@ import numpy as np
 
 from time import time
 
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 class Compound:
     """
@@ -200,7 +200,7 @@ class Compound:
         self.compound_nodes = []
         for compound in tqdm(self.compounds):
             
-            if compound.chembl not in self.chembl_to_drugbank and compound.chembl in activities_chembl:
+            if compound.structure_type == "MOL" and compound.chembl not in self.chembl_to_drugbank and compound.chembl in activities_chembl:
                 
                 compound_id = normalize_curie('chembl:' + compound.chembl)
                 if compound.qed_weighted:
@@ -217,7 +217,6 @@ class Compound:
                     'inchi': compound.std_inchi,
                     'inchikey': compound.std_inchi_key,
                     'qed_score': qed_score,
-                    'structure_type': compound.structure_type,
                 }
                 
                 self.compound_nodes.append((compound_id, 'compound', props))
