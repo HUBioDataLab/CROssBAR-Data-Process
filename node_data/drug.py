@@ -15,6 +15,8 @@ import pandas as pd
 #import modin.pandas as pd
 import numpy as np
 
+from biocypher._logger import logger
+
 
 class Drug:
     """
@@ -43,7 +45,7 @@ class Drug:
 
 
     def download_drug_data(
-        self, cache=False, debug=False, retries=6, 
+        self, cache=False, debug=False, retries=6, download_all=False, download_only_dti=False, download_only_ddi=False, download_only_dgi=False,
         ):
 
         """
@@ -66,40 +68,89 @@ class Drug:
             if not cache:
                 stack.enter_context(curl.cache_off())
             
-            # DTI
-            self.download_chembl_dti_data()
-            self.download_drugbank_node_data(self.user, self.passwd)
-            self.download_drugbank_dti_data()
-            self.download_pharos_dti_data()
-            self.download_dgidb_dti_data()
-            self.download_kegg_dti_data()
-            self.download_stitch_dti_data()
+            t0 = time()
             
-            # DDI
-            self.download_kegg_ddi_data()
-            self.download_ddinter_ddi_data()
+            if download_all:
+                self.download_drugbank_node_data(self.user, self.passwd)
+                self.download_chembl_dti_data()
+                self.download_drugbank_dti_data()
+                self.download_pharos_dti_data()
+                self.download_dgidb_dti_data()
+                self.download_kegg_dti_data()
+                self.download_stitch_dti_data()
+                self.download_kegg_ddi_data()
+                self.download_ddinter_ddi_data()
+                self.download_ctd_data()
+            else:
+                self.download_drugbank_node_data(self.user, self.passwd)
+                
+                # DTI
+                if download_only_dti:
+                    self.download_chembl_dti_data()
+                    self.download_drugbank_dti_data()
+                    self.download_pharos_dti_data()
+                    self.download_dgidb_dti_data()
+                    self.download_kegg_dti_data()
+                    self.download_stitch_dti_data()
+                    return True
+
+                # DDI
+                if download_only_ddi:                
+                    self.download_kegg_ddi_data()
+                    self.download_ddinter_ddi_data()
+                    return True
+
+                # DGI
+                if download_only_dgi:                
+                    self.download_ctd_data()
+                    return True
             
-            # DGI
-            self.download_ctd_data()
+            t1 = time()
+            logger.info(f'All data is downloaded in {round((t1-t0) / 60, 2)} mins'.upper())
             
     
-    def process_drug_data(self):
+    def process_drug_data(self, process_all = False, process_only_dti=False, process_only_ddi=False, process_only_dgi=False,):
         
-        # DTI
-        self.process_drugbank_node_data()
-        self.process_drugbank_dti_data()
-        self.process_chembl_dti_data()
-        self.process_pharos_dti_data()
-        self.process_dgidb_dti_data()
-        self.process_stitch_dti_data()
-        self.process_kegg_dti_data()
+        t0 = time()        
         
-        # DDI
-        self.process_kegg_ddi_data()
-        self.process_ddinter_ddi_data()
+        if process_all:
+            self.process_drugbank_node_data()
+            self.process_drugbank_dti_data()
+            self.process_chembl_dti_data()
+            self.process_pharos_dti_data()
+            self.process_dgidb_dti_data()
+            self.process_stitch_dti_data()
+            self.process_kegg_dti_data()
+            self.process_kegg_ddi_data()
+            self.process_ddinter_ddi_data()
+            self.process_ctd_data()
+            
+        else:
+            self.process_drugbank_node_data()
+
+            # DTI
+            if process_only_dti:
+                self.process_drugbank_dti_data()
+                self.process_chembl_dti_data()
+                self.process_pharos_dti_data()
+                self.process_dgidb_dti_data()
+                self.process_stitch_dti_data()
+                self.process_kegg_dti_data()
+                return True
+
+            # DDI
+            if process_only_ddi:            
+                self.process_kegg_ddi_data()
+                self.process_ddinter_ddi_data()
+                return True
+
+            # DGI
+            if process_only_dgi:
+                self.process_ctd_data()
+                return True
         
-        # DGI
-        self.process_ctd_data()
+        t1 = time()
+        logger.info(f'All data is processed in {round((t1-t0) / 60, 2)} mins'.upper())
         
 
     def download_drugbank_node_data(self, user, passwd, drugbank_node_fields=['InChI', 'InChIKey', 'cas_number', 'name', 'groups', 
@@ -141,7 +192,7 @@ class Drug:
         self.unichem_external_fields = unichem_external_fields
         self.drugbank_external_fields = drugbank_external_fields
         
-        print('Downloading Drugbank drug node data')
+        logger.debug('Downloading Drugbank drug node data')
         t0 = time()
         # Drugbank Object
         self.drugbank_data = drugbank.DrugbankFull(user = user, passwd = passwd)
@@ -161,11 +212,11 @@ class Drug:
                                            drugbank_external_fields=drugbank_external_fields)
         
         t1 = time()
-        print(f'Drugbank drug node data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank drug node data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_drugbank_node_data(self):
         
-        print('Processing Drugbank drug node data')
+        logger.debug('Processing Drugbank drug node data')
         t0 = time()
         
         self.drugbank_drugs = {}
@@ -192,15 +243,16 @@ class Drug:
             
         
         t1 = time()
-        print(f'Drugbank drug node data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank drug node data is processed in {round((t1-t0) / 60, 2)} mins')
 
     def download_drugbank_dti_data(self):
+        
         # edge data
-        print('Downloading Drugbank DTI data')
+        logger.debug('Downloading Drugbank DTI data')
         t0 = time()
         self.drugbank_dti = self.drugbank_data.drugbank_targets_full(fields=['drugbank_id', 'actions', 'references', 'known_action', 'polypeptide',])
         t1 = time()
-        print(f'Drugbank DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
 
     def get_external_database_mappings(self, 
                                        unichem_external_fields: list | None = None, 
@@ -295,7 +347,7 @@ class Drug:
             else:
                 return None
         
-        print('Processing Drugbank DTI data')
+        logger.debug('Processing Drugbank DTI data')
         t0 = time()
         
         # create list instance for pandas dataframes 
@@ -359,7 +411,7 @@ class Drug:
         self.drugbank_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
 
         t1 = time()
-        print(f'Drugbank DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank DTI data is processed in {round((t1-t0) / 60, 2)} mins')
         
     def aggregate_column_level(self, element, joiner="|"):
         import numpy as np
@@ -415,7 +467,7 @@ class Drug:
         """
 
         # edge data
-        print('Downloading DGIdb DTI data')
+        logger.debug('Downloading DGIdb DTI data')
         t0 = time()
         
         self.dgidb_dti = dgidb.dgidb_interactions()
@@ -428,11 +480,11 @@ class Drug:
                 self.entrez_to_uniprot[entrez_id].append(k)
                 
         t1 = time()
-        print(f'Dgidb DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Dgidb DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
                 
     def process_dgidb_dti_data(self):
         
-        print('Processing DGIdb DTI data')
+        logger.debug('Processing DGIdb DTI data')
         t0 = time()
 
         df_list = []
@@ -476,7 +528,7 @@ class Drug:
         self.dgidb_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
 
         t1 = time()
-        print(f'Dgidb DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Dgidb DTI data is processed in {round((t1-t0) / 60, 2)} mins')
         
     def download_kegg_dti_data(
         self,
@@ -498,7 +550,7 @@ class Drug:
         
         organism = common.to_list(organism)
 
-        print(f'Downloading KEGG DTI data for {len(organism)} organism(s)')
+        logger.debug(f'Downloading KEGG DTI data for {len(organism)} organism(s)')
         t0 = time()
 
         self.kegg_dti = set()
@@ -521,12 +573,12 @@ class Drug:
         self.kegg_dti = list(self.kegg_dti)
         
         t1 = time()
-        print(f'KEGG DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'KEGG DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
         
     def process_kegg_dti_data(self):
         
-        print(f'Processing KEGG DTI data')
+        logger.debug(f'Processing KEGG DTI data')
         t0 = time()
 
         self.kegg_dti_df = pd.DataFrame(self.kegg_dti, columns=["drugbank_id", "uniprot_id"])
@@ -534,22 +586,22 @@ class Drug:
         self.kegg_dti_df["source"] = "Kegg"
         
         t1 = time()
-        print(f'KEGG DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'KEGG DTI data is processed in {round((t1-t0) / 60, 2)} mins')
         
     def download_kegg_ddi_data(self, from_csv=True):
         # DDI
-        print('Downloading KEGG DDI data, this may take around 12 hours')
+        logger.debug('Downloading KEGG DDI data, this may take around 12 hours')
         t0 = time()
         if from_csv:
-            print("Skipping to processing part")
+            logger.info("Skipping to processing part")
         else:
             self.kegg_ddi_data = kegg_local.drug_to_drug()
         t1 = time()
-        print(f'KEGG DDI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'KEGG DDI data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_kegg_ddi_data(self, from_csv=True):
         
-        print('Processing KEGG DDI data')
+        logger.debug('Processing KEGG DDI data')
         t0 = time()
         
         if from_csv:
@@ -596,12 +648,12 @@ class Drug:
             self.kegg_ddi_duplicate_removed_df = kegg_ddi_df[~kegg_ddi_df[["drug1", "drug2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
 
         t1 = time()
-        print(f'KEGG DDI data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'KEGG DDI data is processed in {round((t1-t0) / 60, 2)} mins')
             
             
     def download_ddinter_ddi_data(self):
         
-        print('Downloading DDInter DDI data')
+        logger.debug('Downloading DDInter DDI data')
         t0 = time()
         
         ddinter_mappings = ddinter.get_all_mappings()
@@ -611,11 +663,11 @@ class Drug:
         self.ddinter_interactions = ddinter.get_all_interactions()
         
         t1 = time()
-        print(f'DDInter DDI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'DDInter DDI data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_ddinter_ddi_data(self):
         
-        print('Processing DDInter DDI data')
+        logger.debug('Processing DDInter DDI data')
         t0 = time()
         
         df_list = []
@@ -647,21 +699,21 @@ class Drug:
         self.ddinter_duplicate_removed_df = ddinter_df[~ddinter_df[["drug1", "drug2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         t1 = time()
-        print(f'DDInter DDI data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'DDInter DDI data is processed in {round((t1-t0) / 60, 2)} mins')
         
     def download_pharos_dti_data(self):
 
-        print('Downloading Pharos DTI data')
+        logger.debug('Downloading Pharos DTI data')
         t0 = time()
         
         self.pharos_dti = pharos.pharos_targets(ligands=True)
         
         t1 = time()
-        print(f'Pharos DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Pharos DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
     
     def process_pharos_dti_data(self):
         
-        print('Processing Pharos DTI data')
+        logger.debug('Processing Pharos DTI data')
         t0 = time()
 
         df_list = []
@@ -720,11 +772,11 @@ class Drug:
         self.pharos_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()
-        print(f'Pharos DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Pharos DTI data is processed in {round((t1-t0) / 60, 2)} mins')
         
     def download_chembl_dti_data(self):
         
-        print('Downloading Chembl DTI data')
+        logger.debug('Downloading Chembl DTI data')
         t0 = time()
                 
         self.chembl_acts = chembl.chembl_activities(standard_relation='=')
@@ -734,11 +786,11 @@ class Drug:
         self.chembl_mechanisms = chembl.chembl_mechanisms()
         
         t1 = time()
-        print(f'Chembl DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Chembl DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_chembl_dti_data(self):
         
-        print('Processing Chembl DTI data')
+        logger.debug('Processing Chembl DTI data')
         t0 = time()
         
         mechanism_dict = {i.chembl:i._asdict() for i in self.chembl_mechanisms}
@@ -796,22 +848,22 @@ class Drug:
         self.chembl_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()
-        print(f'Chembl DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Chembl DTI data is processed in {round((t1-t0) / 60, 2)} mins')
         
         
     def download_ctd_data(self):
         
-        print('Downloading CTD DGI data')
+        logger.debug('Downloading CTD DGI data')
         t0 = time()
         
         self.ctd_dgi = ctdbase.ctdbase_relations(relation_type='chemical_gene')
         
         t1 = time()
-        print(f'CTD DGI data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'CTD DGI data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_ctd_data(self):
         
-        print('Processing CTD DGI data')
+        logger.debug('Processing CTD DGI data')
         t0 = time()
         
         df_list = []
@@ -863,8 +915,10 @@ class Drug:
         
         self.ctd_cgi_duplicate_removed_df.dropna(subset="action_type", inplace=True)
         
+        self.ctd_cgi_duplicate_removed_df["source"] = "CTD"
+        
         t1 = time()
-        print(f'CTD DGI data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'CTD DGI data is processed in {round((t1-t0) / 60, 2)} mins')
         
 
     def download_stitch_dti_data(
@@ -895,7 +949,7 @@ class Drug:
 
         organism = common.to_list(organism)
         
-        print("Started downloading STITCH data")
+        logger.debug("Started downloading STITCH data")
         t0 = time()
 
         # map string ids to swissprot ids
@@ -946,11 +1000,11 @@ class Drug:
                 # print(f'Skipped tax id {tax}. This is most likely due to the empty file in database. Check the database file.')
 
         t1 = time()        
-        print(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_stitch_dti_data(self):
         
-        print("Started processing STITCH data")
+        logger.debug("Started processing STITCH data")
         t0 = time()
         
         df_list = []
@@ -979,11 +1033,11 @@ class Drug:
         self.stitch_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()        
-        print(f'STITCH data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'STITCH data is processed in {round((t1-t0) / 60, 2)} mins')
         
     def merge_all_dtis(self):
         
-        print("Started merging Drugbank and Chembl DTI data")
+        logger.debug("Started merging Drugbank and Chembl DTI data")
         t0 = time()
 
         # merge drugbank and chembl dti
@@ -1006,9 +1060,9 @@ class Drug:
                                           ], inplace=True)
         
         t1 = time()        
-        print(f'Drugbank and Chembl DTI data is merged in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank and Chembl DTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
-        print("Started merging Drugbank+Chembl and Pharos DTI data")
+        logger.debug("Started merging Drugbank+Chembl and Pharos DTI data")
         t0 = time()
         
         # merge drugbank+chembl and pharos dti
@@ -1040,9 +1094,9 @@ class Drug:
                                                       "mechanism_of_action_type_x", "mechanism_of_action_type_y"], inplace=True)
         
         t1 = time()        
-        print(f'Drugbank+Chembl and Pharos DTI data is merged in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank+Chembl and Pharos DTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
-        print("Started merging Drugbank+Chembl+Pharos and Dgidb DTI data")
+        logger.debug("Started merging Drugbank+Chembl+Pharos and Dgidb DTI data")
         t0 = time()
         
         # merge drugbank+chembl+pharos and dgidb
@@ -1064,9 +1118,9 @@ class Drug:
                                                                  "mechanism_of_action_type_x", "mechanism_of_action_type_y"], inplace=True)
         
         t1 = time()        
-        print(f'Drugbank+Chembl+Pharos and Dgidb DTI data is merged in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank+Chembl+Pharos and Dgidb DTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
-        print("Started merging Drugbank+Chembl+Pharos+Dgidb and Stitch DTI data")
+        logger.debug("Started merging Drugbank+Chembl+Pharos+Dgidb and Stitch DTI data")
         t0 = time()
         
         # merge drugbank+chembl+pharos+dgidb and stitch
@@ -1080,9 +1134,9 @@ class Drug:
         drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df.drop(columns=["source_x", "source_y"], inplace=True)
         
         t1 = time()        
-        print(f'Drugbank+Chembl+Pharos+Dgidb and Stitch DTI data is merged in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank+Chembl+Pharos+Dgidb and Stitch DTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
-        print("Started merging Drugbank+Chembl+Pharos+Dgidb+Stitch and Kegg DTI data")
+        logger.debug("Started merging Drugbank+Chembl+Pharos+Dgidb+Stitch and Kegg DTI data")
         t0 = time()
         
         drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df.merge(self.kegg_dti_df, how="outer", on=["uniprot_id", "drugbank_id"])
@@ -1095,7 +1149,7 @@ class Drug:
         drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df.drop(columns=["source_x", "source_y"], inplace=True)
         
         t1 = time()        
-        print(f'Drugbank+Chembl+Pharos+Dgidb+Stitch and Kegg DTI data is merged in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Drugbank+Chembl+Pharos+Dgidb+Stitch and Kegg DTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
         # create self object from final dataframe
         self.all_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df
@@ -1103,7 +1157,7 @@ class Drug:
         
     def merge_all_ddis(self):
         
-        print("Started merging Kegg and DDInter DDI data")
+        logger.debug("Started merging Kegg and DDInter DDI data")
         t0 = time()
 
         # merge kegg and ddinter ddi data
@@ -1116,35 +1170,43 @@ class Drug:
         kegg_plus_ddinter_ddi_df.drop(columns=["source_x", "source_y"], inplace=True)
         
         t1 = time()        
-        print(f'Kegg and DDInter DDI data is merged in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Kegg and DDInter DDI data is merged in {round((t1-t0) / 60, 2)} mins')
         
         self.all_ddi_df = kegg_plus_ddinter_ddi_df
         
-    def get_drug_nodes(self):
+    def get_drug_nodes(self, early_stopping=None):
         """
         Merges drug node information from different sources. 
         """
 
         self.node_list = []
 
-        print('Started writing drug nodes')
+        logger.debug('Started writing drug nodes')
+        
+        counter = 0
         for k, v in tqdm(self.drugbank_drugs.items()):
             drug_id = normalize_curie('drugbank:' + k)
             
             props = {}
             for prop_key, prop_value in v.items():
                 if prop_value:
-                    props[prop_key.replace(" ", "_").lower()] = prop_value
+                    if isinstance(prop_value, str):                        
+                        props[prop_key.replace(" ", "_").lower()] = prop_value.replace("'", "^")
+                    else:                        
+                        props[prop_key.replace(" ", "_").lower()] = prop_value
                     
 
             self.node_list.append((drug_id, 'drug', props))
-
+            
+            counter += 1
+            if early_stopping and counter == early_stopping:
+                break
 
     def get_dti_edges(self, early_stopping=500):
 
         self.dti_edge_list = []
         
-        print('Started writing DTI edges')
+        logger.debug('Started writing DTI edges')
         for index, row in tqdm(self.all_dti_df.iterrows(), total=self.all_dti_df.shape[0]):
             
             _dict = row.to_dict()
@@ -1157,12 +1219,12 @@ class Drug:
             for k, v in _dict.items():
                 if str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
-                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
                     else:
-                        props[str(k).replace(" ","_").lower()] = v
+                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
-            self.dti_edge_list.append((None, source, target, "targets", props))
+            self.dti_edge_list.append((None, source, target, "drug_targets_protein", props))
             
             if early_stopping and (index+1) == early_stopping:
                 break
@@ -1171,7 +1233,7 @@ class Drug:
         
         self.dgi_edge_list = []
         
-        print('Started writing DGI edges')
+        logger.debug('Started writing DGI edges')
         for index, row in tqdm(self.ctd_cgi_duplicate_removed_df.iterrows(), total=self.ctd_cgi_duplicate_removed_df.shape[0]):
             _dict = row.to_dict()
             source = normalize_curie('drugbank:' + _dict["drugbank_id"])
@@ -1184,9 +1246,9 @@ class Drug:
             for k, v in _dict.items():
                 if str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
-                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
                     else:
-                        props[str(k).replace(" ","_").lower()] = v
+                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
             self.dgi_edge_list.append((None, source, target, label, props))
@@ -1197,7 +1259,7 @@ class Drug:
     def get_ddi_edges(self, early_stopping=500):
         self.ddi_edge_list = []
         
-        print('Started writing DGI edges')
+        logger.debug('Started writing DGI edges')
         
         for index, row in tqdm(self.all_ddi_df.iterrows(), total=self.all_ddi_df.shape[0]):
             _dict = row.to_dict()
@@ -1211,13 +1273,12 @@ class Drug:
             for k, v in _dict.items():
                 if str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
-                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
                     else:
-                        props[str(k).replace(" ","_").lower()] = v
+                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
             self.ddi_edge_list.append((None, source, target, "drug_interacts_with_drug", props))
             
             if early_stopping and (index+1) == early_stopping:
                 break
-                
