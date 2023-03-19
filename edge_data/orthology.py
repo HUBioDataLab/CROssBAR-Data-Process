@@ -1,5 +1,3 @@
-# GEN'I COMMON ID YAP
-
 from __future__ import annotations
 
 from pypath.share import curl, settings
@@ -88,6 +86,11 @@ class Orthology:
 
         self.entry_name_to_uniprot = uniprot.uniprot_data(field= 'entry name', reviewed = True, organism= '*')
         self.entry_name_to_uniprot = {v:k for k,v in self.entry_name_to_uniprot.items()}
+        
+        uniprot_to_entrez = uniprot.uniprot_data(field= 'database(GeneID)', reviewed = True, organism= '*')        
+        self.uniprot_to_entrez = dict()
+        for k, v in uniprot_to_entrez.items():
+            self.uniprot_to_entrez[k] = v.strip(";").split(";")[0]
 
         logger.debug("Started downloading OMA orthology data")
         t0 = time()
@@ -97,6 +100,7 @@ class Orthology:
         for t in tqdm(tax):
             tax_orthology = oma.oma_orthologs(organism_a = 9606, organism_b = t)
             tax_orthology = [i for i in tax_orthology if i.id_a in self.entry_name_to_uniprot and i.id_b in self.entry_name_to_uniprot]
+            tax_orthology = [i for i in tax_orthology if self.uniprot_to_entrez.get(self.entry_name_to_uniprot[i.id_a], None) and self.uniprot_to_entrez.get(self.entry_name_to_uniprot[i.id_b], None)]
             self.oma_orthology.extend(tax_orthology)
 
         t1 = time()
@@ -112,16 +116,17 @@ class Orthology:
         
         df_list = []
         for ortholog in self.oma_orthology:
-            df_list.append((self.entry_name_to_uniprot[ortholog.id_a], self.entry_name_to_uniprot[ortholog.id_b], 
+            df_list.append((self.uniprot_to_entrez[self.entry_name_to_uniprot[ortholog.id_a]],
+                            self.uniprot_to_entrez[self.entry_name_to_uniprot[ortholog.id_b]],
                            ortholog.rel_type, round(ortholog.score)))
 
-        oma_orthology_df = pd.DataFrame(df_list, columns=["uniprot_a", "uniprot_b", "relation_type", "oma_orthology_score"])
+        oma_orthology_df = pd.DataFrame(df_list, columns=["entrez_a", "entrez_b", "relation_type", "oma_orthology_score"])
 
         oma_orthology_df["source"] = "OMA"
         
         oma_orthology_df.sort_values(by="oma_orthology_score", ascending=False, inplace=True)
         
-        self.oma_orthology_duplicate_removed_df = oma_orthology_df[~oma_orthology_df[["uniprot_a", "uniprot_b"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        self.oma_orthology_duplicate_removed_df = oma_orthology_df[~oma_orthology_df[["entrez_a", "entrez_b"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         t1 = time()
         logger.info(f'OMA orthology data is processed in {round((t1-t0) / 60, 2)} mins')
@@ -137,7 +142,7 @@ class Orthology:
         uniprot_to_entrez = uniprot.uniprot_data(field= 'database(GeneID)', reviewed = True, organism= '*')
         self.entrez_to_uniprot = {}
         for k,v in uniprot_to_entrez.items():
-            for entrez in v.split(';'):
+            for entrez in v.strip(';').split(';'):
                 if entrez:
                     self.entrez_to_uniprot[entrez] = k
    
@@ -159,15 +164,17 @@ class Orthology:
         for protein in self.pharos_orthology_init:
             if protein["orthologs"]:
                 for ortholog in protein["orthologs"]:
-                    if ortholog['geneid'] and str(ortholog['geneid']) in self.entrez_to_uniprot and str(ortholog['species']) in selected_species:
-                        df_list.append((protein["uniprot"], self.entrez_to_uniprot[str(ortholog['geneid'])]))
+                    if ortholog['geneid'] and str(ortholog['geneid']) in self.entrez_to_uniprot and str(ortholog['species']) in selected_species\
+                    and protein["uniprot"] in self.uniprot_to_entrez:
+                        
+                        df_list.append((self.uniprot_to_entrez[protein["uniprot"]], str(ortholog['geneid']) ))
                 
         
-        pharos_orthology_df = pd.DataFrame(df_list, columns=["uniprot_a", "uniprot_b"])
+        pharos_orthology_df = pd.DataFrame(df_list, columns=["entrez_a", "entrez_b"])
 
         pharos_orthology_df["source"] = "Pharos"
         
-        self.pharos_orthology_duplicate_removed_df = pharos_orthology_df[~pharos_orthology_df[["uniprot_a", "uniprot_b"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        self.pharos_orthology_duplicate_removed_df = pharos_orthology_df[~pharos_orthology_df[["entrez_a", "entrez_b"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
 
         t1 = time()
         logger.info(f'Pharos orthology data is processed in {round((t1-t0) / 60, 2)} mins')
@@ -194,7 +201,7 @@ class Orthology:
         t0 = time()
         
         oma_plus_pharos_orthology_df = self.oma_orthology_duplicate_removed_df.merge(self.pharos_orthology_duplicate_removed_df, how="outer",
-                                                                       on=["uniprot_a", "uniprot_b"])
+                                                                       on=["entrez_a", "entrez_b"])
         
         oma_plus_pharos_orthology_df["source"] = oma_plus_pharos_orthology_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
         
@@ -217,10 +224,10 @@ class Orthology:
         for index, row in tqdm(self.all_orthology_df.iterrows(), total=self.all_orthology_df.shape[0]):
             _dict = row.to_dict()
             
-            source = normalize_curie('uniprot:' + _dict["uniprot_a"])
-            target = normalize_curie('uniprot:' + _dict["uniprot_b"])
+            source = normalize_curie('ncbigene:' + _dict["entrez_a"])
+            target = normalize_curie('ncbigene:' + _dict["entrez_b"])
             
-            del _dict["uniprot_a"], _dict["uniprot_b"]
+            del _dict["entrez_a"], _dict["entrez_b"]
             
             props = dict()
             for k, v in _dict.items():
@@ -231,7 +238,7 @@ class Orthology:
                         props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
-            self.edge_list.append((None, source, target, "protein_is_orthologous_with_protein", props))
+            self.edge_list.append((None, source, target, "gene_is_orthologous_with_gene", props))
             
             if early_stopping and (index+1) == early_stopping:
                 break
