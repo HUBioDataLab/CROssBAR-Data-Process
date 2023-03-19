@@ -1,3 +1,5 @@
+# GEN'I COMMON ID YAP
+
 from __future__ import annotations
 
 from pypath.share import curl, settings
@@ -7,8 +9,11 @@ from contextlib import ExitStack
 from bioregistry import normalize_curie
 from time import time
 
+import pandas as pd
+import numpy as np 
+
 from biocypher._logger import logger
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 
 OMA_ORGANISMS = {
@@ -221,9 +226,9 @@ class Orthology:
             for k, v in _dict.items():
                 if str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
-                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
                     else:
-                        props[str(k).replace(" ","_").lower()] = v
+                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
             self.edge_list.append((None, source, target, "protein_is_orthologous_with_protein", props))
