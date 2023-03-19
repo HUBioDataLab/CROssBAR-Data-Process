@@ -11,7 +11,9 @@ import numpy as np
 
 from time import time
 
-from tqdm.notebook import tqdm
+from tqdm import tqdm
+
+from biocypher._logger import logger
 
 class Compound:
     """
@@ -40,19 +42,28 @@ class Compound:
             if not cache:
                 stack.enter_context(curl.cache_off())
             
+            t0 = time()
+            
             self.download_chembl_data()
             self.download_stitch_cti_data()
             
+            t1 = time()
+            logger.info(f'All data is downloaded in {round((t1-t0) / 60, 2)} mins'.upper())
+            
     def process_compound_data(self):
+        t0 = time()
         
         self.process_chembl_cti_data()
         self.process_stitch_cti_data()
+        
+        t1 = time()
+        logger.info(f'All data is processed in {round((t1-t0) / 60, 2)} mins'.upper())
         
             
     def download_chembl_data(self):
         
         t0 = time()
-        print('Started downloading Chembl data')
+        logger.debug('Started downloading Chembl data')
             
         self.compounds = chembl.chembl_molecules()
 
@@ -75,7 +86,7 @@ class Compound:
         self.chembl_to_drugbank = {k:list(v)[0] for k, v in self.chembl_to_drugbank.items()}
             
         t1 = time()
-        print(f'Chembl data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Chembl data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     
     def download_stitch_cti_data(
@@ -96,7 +107,7 @@ class Compound:
             
         organism = common.to_list(organism)
         
-        print("Started downloading STITCH data")
+        logger.debug("Started downloading STITCH data")
         t0 = time()
         
         # map string ids to swissprot ids
@@ -132,7 +143,7 @@ class Compound:
             try:
                 organism_stitch_ints = [
                     i for i in stitch.stitch_links_interactions(ncbi_tax_id=int(tax), score_threshold=score_threshold, physical_interaction_score= physical_interaction_score)
-                    if i.partner_b in self.string_to_uniprot and i.partner_a in self.pubchem_to_drugbank and i.partner_a not in self.pubchem_to_drugbank] # filter with swissprot ids
+                    if i.partner_b in self.string_to_uniprot and i.partner_a in self.pubchem_to_chembl and i.partner_a not in self.pubchem_to_drugbank] # filter with swissprot ids
 
                 # TODO: later engage below print line to biocypher log 
                 # print(f"Downloaded STITCH data with taxonomy id {str(tax)}")
@@ -147,11 +158,11 @@ class Compound:
 
 
         t1 = time()        
-        print(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_stitch_cti_data(self):
         
-        print("Started processing STITCH data")
+        logger.debug("Started processing STITCH data")
         t0 = time()
         
         df_list = []
@@ -179,13 +190,13 @@ class Compound:
         self.stitch_cti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()        
-        print(f'STITCH data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'STITCH data is processed in {round((t1-t0) / 60, 2)} mins')
         
     def get_compound_nodes(self):
         """
         Reformats compound node data to be ready for import into a BioCypher database.
         """
-        print('Writing compound nodes...')
+        logger.debug('Writing compound nodes...')
         
         # will filter out chembl ids whether they have edge or not
         activities_chembl = set()
@@ -267,7 +278,7 @@ class Compound:
         
     def process_chembl_cti_data(self):
         
-        print("Started Chembl processing compound-target interaction data")
+        logger.debug("Started Chembl processing compound-target interaction data")
         t0 = time()
         
         df_list = []
@@ -311,12 +322,12 @@ class Compound:
         self.chembl_cti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()
-        print(f'Chembl data is processed in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Chembl data is processed in {round((t1-t0) / 60, 2)} mins')
         
         
     def merge_all_ctis(self):
         
-        print("Started merging Chembl and Stitch CTI (Compound-Target Interaction) data")
+        logger.debug("Started merging Chembl and Stitch CTI (Compound-Target Interaction) data")
         t0 = time()
         
         # merge chembl and stitch cti data
@@ -331,7 +342,7 @@ class Compound:
         chembl_plus_stitch_cti_df.drop(columns=["source_x", "source_y"], inplace=True)
         
         t1 = time()        
-        print(f'Chembl and Stitch CTI data is merged in {round((t1-t0) / 60, 2)} mins')
+        logger.info(f'Chembl and Stitch CTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
         self.all_cti_df = chembl_plus_stitch_cti_df
         
@@ -341,7 +352,7 @@ class Compound:
         Reformats compound-target edge data to be ready for import into a BioCypher database.
         """
 
-        print('Writing compound-target edges...')
+        logger.debug('Writing compound-target edges...')
         self.cti_edge_list = []
         
         for _, row in tqdm(self.all_cti_df.iterrows(), total=self.all_cti_df.shape[0]):
@@ -355,9 +366,9 @@ class Compound:
             for k, v in _dict.items():
                 if str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
-                        props[str(k).replace(" ","_").lower()] = v.split("|")
+                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
                     else:
-                        props[str(k).replace(" ","_").lower()] = v
+                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
-            self.cti_edge_list.append((None, source, target, "targets", props))
+            self.cti_edge_list.append((None, source, target, "compound_targets_protein", props))
