@@ -80,8 +80,7 @@ class Disease:
 
     def get_dti_edges(self):
         
-        # template_1
-        print('Started writing Template DTI')
+Disease()
 
         # template_2
         print('Started writing Template_2 DTI')
