@@ -165,7 +165,7 @@ class Disease:
 
             try:
                 self.disgenet_gda_edges.extend(
-                    self.disgenet_api.get_gdas_by_diseases(disease)
+                    self.disgenet_api.get_gdas_by_diseases(disease_id)
                 )
 
             except TypeError:
