@@ -4,6 +4,7 @@ import collections
 import csv
 import re
 import asyncio
+import warnings
 
 from concurrent.futures.thread import ThreadPoolExecutor
 
@@ -101,6 +102,10 @@ def drug_to_drug(
 
     drug = _Drug()
     compound = _Compound()
+
+    if asynchronous:
+        warnings.warn('Async is not implemented for now. Defaulting to False...')
+        asynchronous = False
     
     if drugs != None:
 
@@ -108,6 +113,7 @@ def drug_to_drug(
 
     else:
         drugIds = drug.get_data().keys()
+        # Async will be false until it gets implemented properly
         entries = _kegg_ddi(drugIds, join=False, asynchronous=False)
 
     interactions = dict()
@@ -135,6 +141,7 @@ def drug_to_drug(
             else:
 
                 print(f'Unknown type \'{entry_type}\', exiting...')
+                exit()
 
             try:
 
@@ -201,6 +208,71 @@ def drug_to_drug(
     
     return interactions
 
+def get_diseases(diseases):
+
+    result = _kegg_get(diseases)
+
+    DiseaseEntry = collections.namedtuple(
+        'DiseaseEntry',
+        (
+            'db_links',
+            'references',
+        )
+    )
+
+    entries = list()
+
+    db_links = dict()
+    references = list()
+
+    db_links_regex = r'(?:DBLINKS)?\s*([^:\s]+)\s*:\s*(.+)'
+    db_links_matcher = re.compile(db_links_regex)
+
+    references_regex = r'REFERENCE\s*([^\s]+)'
+    references_matcher = re.compile(references_regex)
+
+    state = None
+
+    for line in result:
+
+        line = line.strip(' ')
+
+        if line.startswith('///'):
+            entries.append(
+                DiseaseEntry(
+                    db_links,
+                    references
+                )
+            )
+
+            db_links = dict()
+            references = list()
+            state = None
+        
+        elif line.startswith('DBLINKS'):
+            state = 'DBLINKS'
+            key, value = db_links_matcher.findall(line)[0]
+            if ' ' in value:
+                value = value.split(' ')
+            db_links[key] = value
+        
+        elif line.startswith('REFERENCE'):
+            state = None
+            if references_matcher.findall(line):
+                reference = references_matcher.findall(line)[0]
+                references.append(reference)
+        
+        else:
+            if state == 'DBLINKS':
+                key, value = db_links_matcher.findall(line)[0]
+                if ' ' in value:
+                    value = value.split(' ')
+                db_links[key] = value
+            else:
+                continue
+    
+    return entries
+
 
 def kegg_gene_id_to_ncbi_gene_id(org):
 
@@ -232,7 +304,7 @@ def chebi_id_to_kegg_drug_id():
     return _kegg_conv('chebi', 'drug', source_split=True, target_split=True)
 
 
-def _kegg_general(operation, *arguments):
+def _kegg_general(operation, *arguments, split=True):
 
     url = _url % operation
 
@@ -243,7 +315,7 @@ def _kegg_general(operation, *arguments):
     c = curl.Curl(url, silent = True, large = False)
 
     try:
-        return [line.split('\t') for line in c.result.split('\n') if line != '']
+        return [line.split('\t') if split else line for line in c.result.split('\n') if line]
     except AttributeError:
         return []
 
@@ -266,7 +338,7 @@ async def _kegg_general_async(operation, *arguments):
     c = await curl.Curl(url, silent = True, large = False)
 
     try:
-        return [line.split('\t') for line in c.result.split('\n') if line != '']
+        return [line.split('\t') if split else line for line in c.result.split('\n') if line]
     except AttributeError:
         return []
 
@@ -283,6 +355,18 @@ def _kegg_list(database, option=None, org=None):
     
     return _kegg_general('list', database)
 
+def _kegg_get(db_entries: list | tuple | str):
+
+    if isinstance(db_entries, list) or isinstance(db_entries, tuple):
+        db_entries = '+'.join(db_entries)
+    elif isinstance(db_entries, str):
+        pass
+    else:
+        print(f'Unrecognized db_entries type: {type(db_entries)}')
+        print('Exiting...')
+        exit()
+    
+    return _kegg_general('get', db_entries, split=False)
 
 def _kegg_conv(source_db, target_db, source_split=False, target_split=False):
 
@@ -360,9 +444,8 @@ async def _kegg_ddi_async(drugIds):
     if isinstance(drugIds, Iterable):
 
         for response in asyncio.as_completed([_kegg_general_async('ddi', drugId) for drugId in drugIds]):
-            to_print = await response
-            print(to_print)
-            result.extend(to_print)
+            response = await response
+            result.extend(response)
 
         return result
 
