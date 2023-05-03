@@ -216,6 +216,23 @@ class Disease:
             t1 = time()
             print(f"KEGG drug indication data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
+    def download_opentargets_data(self):
+        if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
+            t0 = time()
+            
+            self.opentargets_direct = opentargets.overall_direct_score()
+                           
+            uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "9606", True)
+            self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot_to_entrez.items()}
+            
+            if not hasattr(self, "ensembl_gene_to_uniprot"):
+                uniprot_to_ensembl = uniprot.uniprot_data("database(Ensembl)", "9606", True)
+
+                self.ensembl_gene_to_uniprot = {self.ensembl_transcript_to_ensembl_gene(ensts):uniprot_id for uniprot_id, ensts in uniprot_to_ensembl.items() if self.ensembl_transcript_to_ensembl_gene(ensts)}
+            
+            t1 = time()
+            print(f"Open Targets direct gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            
     def download_diseases_data(self):
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
@@ -237,7 +254,18 @@ class Disease:
                     self.ensembl_protein_to_uniprot[p] = v
             
             t1 = time()
-            print(f"DISEASES gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")        
+            print(f"DISEASES gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            
+    def download_clinvar_data(self):
+        if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
+            t0 = time()
+            
+            self.clinvar_variant_disease = clinvar.clinvar_raw()
+            
+            self.clinvar_citation = clinvar.clinvar_citations()
+            
+            t1 = time()
+            print(f"Clinvar variant-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
         
     def prepare_mappings(self):
         self.mondo_mappings = collections.defaultdict(dict)
@@ -253,7 +281,7 @@ class Disease:
                         db = mapping_db_list[mapping_db_list.index(xref.get("database"))]
                         self.mondo_mappings[db][xref["id"]] = term.obo_id
                         
-    def process_ctd_chemical_disease(self): # DUPLICATELERE BAK     
+    def process_ctd_chemical_disease(self):     
         
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
@@ -283,6 +311,10 @@ class Disease:
         df = pd.DataFrame(df_list, columns=["disease_id", "drug_id", "pubmed_ids"])
         df["source"] = "CTD"
         
+        df = df.groupby(["disease_id", "drug_id"], sort=False, as_index=False).aggregate({"disease_id":"first",
+                                                                                          "drug_id":"first",
+                                                                                          "pubmed_ids":self.merge_source_column,
+                                                                                          "source":"first"})        
         t1 = time()
         print(f"CTD chemical-disease interaction data is processed in {round((t1-t0) / 60, 2)} mins")
         
@@ -307,7 +339,7 @@ class Disease:
                 drug_id = self.chembl_to_drugbank.get(dd.molecule_chembl)
                 
                 if db == "MONDO":
-                    df_list.append((disease_id, drug_id, dd.max_phase))
+                    df_list.append((dd.efo_id, drug_id, dd.max_phase))
                 else:
                     if self.mondo_mappings[db].get(disease_id):
                         disease_id = self.mondo_mappings[db].get(disease_id)
@@ -315,6 +347,8 @@ class Disease:
         
         df = pd.DataFrame(df_list, columns=["disease_id", "drug_id", "max_phase"])
         df["source"] = "ChEMBL"
+        
+        df.sort_values(by="max_phase", ascending=False, ignore_index=True, inplace=True)
         
         df.drop_duplicates(subset=["disease_id", "drug_id"], ignore_index=True, inplace=True)
         
@@ -363,10 +397,38 @@ class Disease:
         df = pd.DataFrame(df_list, columns=["disease_id", "drug_id",])
         df["source"] = "KEGG"
         
+        # Doesnt look necessary
         df.drop_duplicates(subset=["disease_id", "drug_id"], ignore_index=True, inplace=True)
         
         return df
     
+    def process_opentargets_gene_disease(self):
+        if not hasattr(self, "mondo_mappings"):
+            self.prepare_mappings()
+        if not hasattr(self, "opentargets_direct"):
+            self.download_opentargets_data()
+        
+        df_list = []
+        for disease, targets in self.opentargets_direct.items():
+            db = disease.split("_")[0]
+            for target in targets:
+                if self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target["targetId"]))\
+                and self.mondo_mappings[db].get(disease.split("_")[1]):
+                    gene_id = self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target["targetId"]))
+                    disease_id = self.mondo_mappings[db].get(disease.split("_")[1])
+                    score = round(target["score"], 3) # NE YAPILACAK BU?
+                    df_list.append((gene_id, disease_id, score))
+                    
+        
+        df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "opentargets_score"])
+        df["source"] = "Open Targets"
+        
+        df.sort_values(by="opentargets_score", ascending=False, ignore_index=True, inplace=True)
+        
+        df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
+        
+        return df
+        
     def process_diseases_gene_disease(self):
 
         if not hasattr(self, "mondo_mappings"):
@@ -387,23 +449,81 @@ class Disease:
 
         diseases_knowledge_df = pd.DataFrame(df_list, columns=["gene_id", "disease_id",])
         diseases_knowledge_df["source"] = "DISEASES Knowledge"
+        
+        # drop duplicates
+        diseases_knowledge_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
 
         df_list = []
         for dg in tqdm(self.diseases_experimental):
             if self.ensembl_protein_to_uniprot.get(dg.gene_identifier) and self.mondo_mappings["DOID"].get(dg.disease_identifier.split(":")[1]):
                 gene_id = self.ensembl_protein_to_uniprot.get(dg.gene_identifier)
                 disease_id = self.mondo_mappings["DOID"].get(dg.disease_identifier.split(":")[1])
-                df_list.append((gene_id, disease_id))
+                score = float(dg.confidence_score)
+                df_list.append((gene_id, disease_id, score))
 
-        diseases_experimental_df = pd.DataFrame(df_list, columns=["gene_id", "disease_id",])
+        diseases_experimental_df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "diseases_confidence_score"])
         diseases_experimental_df["source"] = "DISEASES Experimental"
+        
+        df.sort_values(by="diseases_confidence_score", ascending=False, ignore_index=True, inplace=True)
+        
+        # drop duplicates
+        diseases_experimental_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
         
         t1 = time()
         print(f"DISEASES gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
 
-        return diseases_knowledge_df, diseases_experimental_df 
+        return diseases_knowledge_df, diseases_experimental_df
+    
+    def process_clinvar_gene_disease(self):
+        if not hasattr(self, "mondo_mappings"):
+            self.prepare_mappings()
+        if not hasattr(self, "clinvar_variant_disease"):
+            self.download_clinvar_data()
+            
+        print("Processing Clinvar variant-disease data")
+        t0 = time()
         
-    def merge_disease_drug_edge_data(self):
+        selected_clinical_significances = ["Pathogenic", "Likely pathogenic", "Pathogenic/Likely pathogenic"]
+        selected_review_status = ["criteria provided, multiple submitters, no conflicts", "reviewed by expert panel",
+                         "practice guideline"]
+        review_status_dict = {"criteria provided, multiple submitters, no conflicts":2,
+                             "reviewed by expert panel":3,
+                             "practice guideline":4}
+        clinvar_dbs_to_mondo_dbs = {"MONDO":"MONDO", "OMIM":"OMIM", "Orphanet":"Orphanet", "HP":"HP", "MeSH":"MESH"}
+        
+        df_list = []
+        for var in tqdm(self.clinvar_variant_disease):
+            if var.entrez and var.clinical_significance in selected_clinical_significances and var.review_status in selected_review_status:
+                diseases_set = set()
+                for phe in var.phenotype_ids:
+                    dbs_and_ids = list(dict.fromkeys(phe.split(":")).keys())
+                    
+                    if len(dbs_and_ids) > 2:
+                        dbs_and_ids = phe.split(":")[1:]
+                        
+                    if dbs_and_ids[0] in clinvar_dbs_to_mondo_dbs.keys():
+                        if dbs_and_ids[0] == "MONDO":
+                            diseases_set.add("MONDO:"+dbs_and_ids[1])
+                        else:
+                            if self.mondo_mappings[clinvar_dbs_to_mondo_dbs[dbs_and_ids[0]]].get(dbs_and_ids[1]):
+                                diseases_set.add(self.mondo_mappings[clinvar_dbs_to_mondo_dbs[dbs_and_ids[0]]].get(dbs_and_ids[1]))
+                
+                if diseases_set:
+                    review_status = review_status_dict[var.review_status]
+                    for d in diseases_set:
+                        df_list.append((var.entrez, d, var.allele, var.clinical_significance, review_status,
+                                       "rs"+str(var.rs), var.variation_id)) # NELER EKLENECEK?
+                        
+        df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "allele_id", "clinical_significance",
+                                           "review_status", "dbsnp_id", "variation_id"])
+                                    
+                    
+        t1 = time()
+        print(f"Clinvar variant-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+        
+        return df
+        
+    def merge_disease_drug_edge_data(self) -> pd.DataFrame:
         # Prepare dataframes for merging
         ctd_df = self.process_ctd_chemical_disease()
         
@@ -433,7 +553,7 @@ class Disease:
         
         return merged_df
             
-    def get_nodes(self, label="disease"):
+    def get_nodes(self, label="disease") -> list:
         print("Preparing Disease nodes")
         
         node_list = []
