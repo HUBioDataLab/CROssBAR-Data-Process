@@ -326,6 +326,15 @@ class Disease:
                 
             if not hasattr(self, "disgenet_id_mappings_dict"):
                 self.prepare_disgenet_id_mappings()
+                
+            if not hasattr(self, "uniprot_to_entrez"):
+                uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "9606", True)
+                self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot_to_entrez.items()}
+                
+            self.gene_symbol_to_uniprot = {}
+            for k, v in uniprot.uniprot_data("genes", "9606", True).items():
+                for symbol in v.split(" "):
+                    self.gene_symbol_to_uniprot[symbol] = k
                     
             
             self.disgenet_gda = []
@@ -610,8 +619,28 @@ class Disease:
                                            "review_status", "dbsnp_id", "variation_id"])
         df["source"] = "Clinvar"
         df["variant_source"] = "Clinvar"
-                                    
-                    
+        
+        
+        df_list = []
+        for cit in self.clinvar_citation:
+            if cit.citation_source in ["PubMed", "PubMedCentral"]:
+                df_list.append((cit.allele, cit.variation_id, cit.citation_id))
+
+
+        clinvar_citation_df = pd.DataFrame(df_list, columns=["allele_id", "variation_id", "pubmed_ids"])
+        clinvar_citation_df = clinvar_citation_df.groupby(["allele_id", "variation_id"], sort=False, as_index=False).aggregate(
+                                                                                         {"allele_id":"first",
+                                                                                          "variation_id":"first",
+                                                                                          "pubmed_ids":self.merge_source_column,
+                                                                                          })
+        
+        
+        df = df.merge(clinvar_citation_df, how="left", on=["allele_id", "variation_id"])
+        
+        df.sort_values(by="review_status", ascending=False, ignore_index=True, inplace=True)
+        
+        df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
+        
         t1 = time()
         print(f"Clinvar variant-disease data is processed in {round((t1-t0) / 60, 2)} mins")
         
@@ -638,17 +667,98 @@ class Disease:
         df["source"] = "Humsavar"
         df["variant_source"] = "Humsavar"
         
-        df = df.groupby(["gene_id", "disease_id"], sort=False, as_index=False).aggregate({"gene_id":"first",
-                                                                            "disease_id":"first",
-                                                                            "dbsnp_id":self.merge_source_column,
-                                                                            "source":"first",
-                                                                            "variant_source":"first"})
+        df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
                 
         t1 = time()
         print(f"Humsavar variant-disease data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
+    def process_disgenet_gene_disease(self, from_csv = True):
+        
+        if not hasattr(self, "mondo_mappings"):
+            self.prepare_mappings()
+        if not hasattr(self, "disgenet_id_mappings_dict"):
+            self.prepare_disgenet_id_mappings()
+        if not hasattr(self, "disgenet_gda") or not hasattr(self, "disgenet_vda"):
+            self.download_disgenet_data()
+            
+        disgenet_dbs_to_mondo_dbs = {"DO":"DOID", "EFO":"EFO", "HPO":"HP", "MSH":"MESH", "NCI":"NCIT", "ICD10CM":"ICD10CM",
+                            "OMIM":"OMIM"}
+        
+        if from_csv:
+            print("Processing Disgenet gene-disease data from csv")
+            t0 = time()
+            
+            disgenet_gda_df = pd.read_csv("disgenet_dga.csv")
+            
+            disgenet_vda_df = pd.read_csv("disgenet_vda.csv")
+            
+            t1 = time()
+            print(f"Disgenet gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+            
+            return something1, something2
+        else:
+            print("Processing Disgenet gene-disease data")
+            t0 = time()
+            
+            df_list = []
+            for gda in self.disgenet_gda:
+                diseaseid = self.mondo_mappings["UMLS"].get(dga.diseaseid)
+                
+                if not diseaseid:
+                    if self.disgenet_id_mappings_dict.get(dga.diseaseid):
+                        if self.disgenet_id_mappings_dict.get(dga.diseaseid).get("MONDO"):
+                            diseaseid = "MONDO:" + self.disgenet_id_mappings_dict.get(dga.diseaseid).get("MONDO")
+                        else:
+                            map_dict = self.disgenet_id_mappings_dict.get(dga.diseaseid)
+                            for db, map_v in map_dict.items():                  
+                                if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):                        
+                                    diseaseid = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
+                                    break
+                
+                if diseaseid:
+                    df_list.append((gda.geneid, diseaseid, gda.score))
+                    
+            disgenet_gda_df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "disgenet_gene_disease_score"])
+            disgenet_gda_df["source"] = "Disgenet Gene-Disease"
+            
+            # DOES NOT LOOK NECESSARY
+            disgenet_gda_df.sort_values(by="disgenet_gene_disease_score", ascending=False, ignore_index=True, inplace=True)
+            disgenet_gda_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
+            
+            df_list = []
+            for vda in self.disgenet_vda:
+                if vda.gene_symbol and self.uniprot_to_entrez.get(self.gene_symbol_to_uniprot.get(vda.gene_symbol)):
+                    diseaseid = self.mondo_mappings["UMLS"].get(vda.diseaseid)
+
+                    if not diseaseid:
+                        if self.disgenet_id_mappings_dict.get(vda.diseaseid):
+                            if self.disgenet_id_mappings_dict.get(vda.diseaseid).get("MONDO"):
+                                diseaseid = "MONDO:" + self.disgenet_id_mappings_dict.get(vda.diseaseid).get("MONDO")
+                            else:
+                                map_dict = self.disgenet_id_mappings_dict.get(vda.diseaseid)
+                                for db, map_v in map_dict.items():                  
+                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):                        
+                                        diseaseid = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
+                                        break
+
+                    if diseaseid:
+                        df_list.append((vda.geneid, diseaseid, vda.score, vda.variantid))
+                        
+            
+            disgenet_vda_df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "disgenet_variant_disease_score", "dbsnp_id"])
+            disgenet_vda_df["source"] = "Disgenet Variant-Disease"
+            disgenet_vda_df["variant_source"] = "Disgenet Variant-Disease"
+            
+            disgenet_vda_df.sort_values(by="disgenet_variant_disease_score", ascending=False, ignore_index=True, inplace=True)
+            disgenet_vda_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
+                
+            t1 = time()
+            print(f"Disgenet gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+            
+            return disgenet_gda_df, disgenet_vda_df
+            
     def process_disgenet_disease_disease(self, from_csv = True):
         
         if not hasattr(self, "mondo_mappings"):
