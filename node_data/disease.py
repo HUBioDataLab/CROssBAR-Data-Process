@@ -218,6 +218,24 @@ class Disease:
             t1 = time()
             print(f"KEGG drug indication data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
+        if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
+            t0 = time()
+            
+            self.kegg_gene_disease = kegg_local.gene_to_disease(org="hsa")
+            
+            self.kegg_gene_id_to_entrez = kegg_local.kegg_gene_id_to_ncbi_gene_id("hsa")
+            
+            if not hasattr(self, "kegg_diseases_mappings"):
+                kegg_disease_ids = kegg_local._Disease()._data.keys()
+                
+                self.kegg_diseases_mappings = {}
+                for dis in kegg_disease_ids:
+                    result = kegg_local.get_diseases(dis)
+                    self.kegg_diseases_mappings[dis] = result[0].db_links
+            
+            t1 = time()
+            print(f"KEGG gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            
     def download_opentargets_data(self):
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
@@ -284,7 +302,19 @@ class Disease:
             
     def download_disgenet_data(self, from_csv = True):
         if from_csv:
-            print("Skipping downloading part. Will directly process from csv file")
+            if not hasattr(self, "disgenet_id_mappings_dict"):
+                self.prepare_disgenet_id_mappings()
+                
+            if not hasattr(self, "uniprot_to_entrez"):
+                uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "9606", True)
+                self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot_to_entrez.items()}
+                
+            self.gene_symbol_to_uniprot = {}
+            for k, v in uniprot.uniprot_data("genes", "9606", True).items():
+                for symbol in v.split(" "):
+                    self.gene_symbol_to_uniprot[symbol] = k
+            
+            print("Skipping downloading part of Disgenet. Will directly process from csv file")
             
         if DiseaseEdgeType.DISEASE_TO_DISEASE in self.edge_types and not from_csv:
             t0 = time()
@@ -515,10 +545,11 @@ class Disease:
             for target in targets:
                 if self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target["targetId"]))\
                 and self.mondo_mappings[db].get(disease.split("_")[1]):
-                    gene_id = self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target["targetId"]))
-                    disease_id = self.mondo_mappings[db].get(disease.split("_")[1])
-                    score = round(target["score"], 3) # NE YAPILACAK BU?
-                    df_list.append((gene_id, disease_id, score))
+                    score = round(target["score"], 3)
+                    if score != 0.0:
+                        gene_id = self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target["targetId"]))
+                        disease_id = self.mondo_mappings[db].get(disease.split("_")[1])
+                        df_list.append((gene_id, disease_id, score))
                     
         
         df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "opentargets_score"])
@@ -565,7 +596,7 @@ class Disease:
         diseases_experimental_df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "diseases_confidence_score"])
         diseases_experimental_df["source"] = "DISEASES Experimental"
         
-        df.sort_values(by="diseases_confidence_score", ascending=False, ignore_index=True, inplace=True)
+        diseases_experimental_df.sort_values(by="diseases_confidence_score", ascending=False, ignore_index=True, inplace=True)
         
         # drop duplicates
         diseases_experimental_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
@@ -656,7 +687,7 @@ class Disease:
         t0 = time()
 
         df_list = []
-        for v in self.humsavar_data:
+        for v in tqdm(self.humsavar_data):
             if v.variant_category == "LP/P" and v.disease_omim_id and v.dbSNP and self.uniprot_to_entrez.get(v.swiss_prot_ac)\
             and self.mondo_mappings["OMIM"].get(v.disease_omim_id.split(":")[1]):
                 gene_id = self.uniprot_to_entrez.get(v.swiss_prot_ac)
@@ -674,6 +705,51 @@ class Disease:
         
         return df
     
+    def process_kegg_gene_disease(self):
+        if not hasattr(self, "mondo_mappings"):
+            self.prepare_mappings()
+        if not hasattr(self, "kegg_gene_disease"):
+            self.download_kegg_data()
+            
+        print("Processing KEGG gene-disease data")
+        t0 = time()
+        
+        kegg_dbs_to_mondo_dbs = {"MeSH":"MESH", "OMIM":"OMIM", "ICD-10":"ICD10CM",}
+        
+        df_list = []
+        for gene, kegg_diseases in self.kegg_gene_disease.items():
+            if self.kegg_gene_id_to_entrez.get(gene):
+                for interaction in kegg_diseases.DiseaseEntries:
+                    disease_id = None
+                    if self.kegg_diseases_mappings.get(interaction.disease_id):
+                        found = False
+                        
+                        for db in kegg_dbs_to_mondo_dbs.keys():
+                            if found:
+                                break
+                            
+                            if self.kegg_diseases_mappings[interaction.disease_id].get(db):
+                                for ref in self.ensure_iterable(self.kegg_diseases_mappings[interaction.disease_id][db]):
+                                    if found:
+                                        break
+                                        
+                                    if self.mondo_mappings[kegg_dbs_to_mondo_dbs[db]].get(ref):
+                                        disease_id = self.mondo_mappings[kegg_dbs_to_mondo_dbs[db]].get(ref)
+                                        found = True
+                                        
+                    if disease_id:
+                        gene_id = self.kegg_gene_id_to_entrez.get(gene)
+                        df_list.append((gene_id, disease_id))
+                        
+        df = pd.DataFrame(df_list, columns=["gene_id", "disease_id"])
+        
+        df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
+        
+        t1 = time()
+        print(f"KEGG gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+        
+        return df
+    
     def process_disgenet_gene_disease(self, from_csv = True):
         
         if not hasattr(self, "mondo_mappings"):
@@ -682,40 +758,67 @@ class Disease:
             self.prepare_disgenet_id_mappings()
         if not hasattr(self, "disgenet_gda") or not hasattr(self, "disgenet_vda"):
             self.download_disgenet_data()
-            
-        disgenet_dbs_to_mondo_dbs = {"DO":"DOID", "EFO":"EFO", "HPO":"HP", "MSH":"MESH", "NCI":"NCIT", "ICD10CM":"ICD10CM",
-                            "OMIM":"OMIM"}
         
         if from_csv:
             print("Processing Disgenet gene-disease data from csv")
             t0 = time()
             
+            # 
             disgenet_gda_df = pd.read_csv("disgenet_dga.csv")
             
+            disgenet_gda_df = disgenet_gda_df[["geneid", "diseaseid", "score"]]
+            disgenet_gda_df.rename(columns={"geneid":"gene_id", "diseaseid":"disease_id", "score":"disgenet_gene_disease_score"},
+                                  inplace=True)
+            
+            disgenet_gda_df["gene_id"] = disgenet_gda_df["gene_id"].astype("str")
+            
+            disgenet_gda_df["disease_id"] = disgenet_gda_df["disease_id"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
+            disgenet_gda_df.dropna(subset="disease_id", inplace=True)
+            
+            disgenet_gda_df["source"] = "Disgenet Gene-Disease"
+            
+            disgenet_gda_df.sort_values(by="disgenet_gene_disease_score", ascending=False, ignore_index=True, inplace=True)
+            disgenet_gda_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
+            
+            # 
             disgenet_vda_df = pd.read_csv("disgenet_vda.csv")
+            
+            disgenet_vda_df = disgenet_vda_df[["gene_symbol", "diseaseid", "variantid", "score"]]
+            disgenet_vda_df.dropna(subset="gene_symbol", inplace=True)
+            
+            disgenet_vda_df.rename(columns={"gene_symbol":"gene_symbol", "diseaseid":"disease_id", "score":"disgenet_variant_disease_score",
+                                           "variantid":"dbsnp_id"},
+                                  inplace=True)
+            
+            disgenet_vda_df["disease_id"] = disgenet_vda_df["disease_id"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
+            disgenet_vda_df.dropna(subset="disease_id", inplace=True)
+            
+            def map_gene_symbol_to_geneid(gene_symbol):
+                if self.uniprot_to_entrez.get(self.gene_symbol_to_uniprot.get(gene_symbol)):
+                    return self.uniprot_to_entrez.get(self.gene_symbol_to_uniprot.get(gene_symbol))
+                else:
+                    return np.nan                
+            
+            disgenet_vda_df["gene_id"] = disgenet_vda_df["gene_symbol"].apply(map_gene_symbol_to_geneid)            
+            disgenet_vda_df.dropna(subset="gene_id", inplace=True)
+            
+            disgenet_vda_df["source"] = "Disgenet Variant-Disease"
+            disgenet_vda_df["variant_source"] = "Disgenet Variant-Disease"
+            
+            disgenet_vda_df.sort_values(by="disgenet_variant_disease_score", ascending=False, ignore_index=True, inplace=True)
+            disgenet_vda_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
             
             t1 = time()
             print(f"Disgenet gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
             
-            return something1, something2
+            return disgenet_gda_df, disgenet_vda_df
         else:
             print("Processing Disgenet gene-disease data")
             t0 = time()
             
             df_list = []
             for gda in self.disgenet_gda:
-                diseaseid = self.mondo_mappings["UMLS"].get(dga.diseaseid)
-                
-                if not diseaseid:
-                    if self.disgenet_id_mappings_dict.get(dga.diseaseid):
-                        if self.disgenet_id_mappings_dict.get(dga.diseaseid).get("MONDO"):
-                            diseaseid = "MONDO:" + self.disgenet_id_mappings_dict.get(dga.diseaseid).get("MONDO")
-                        else:
-                            map_dict = self.disgenet_id_mappings_dict.get(dga.diseaseid)
-                            for db, map_v in map_dict.items():                  
-                                if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):                        
-                                    diseaseid = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                    break
+                diseaseid = self.map_disgenet_disease_id_to_mondo_id(gda.diseaseid, return_pandas_none = False)
                 
                 if diseaseid:
                     df_list.append((gda.geneid, diseaseid, gda.score))
@@ -730,18 +833,7 @@ class Disease:
             df_list = []
             for vda in self.disgenet_vda:
                 if vda.gene_symbol and self.uniprot_to_entrez.get(self.gene_symbol_to_uniprot.get(vda.gene_symbol)):
-                    diseaseid = self.mondo_mappings["UMLS"].get(vda.diseaseid)
-
-                    if not diseaseid:
-                        if self.disgenet_id_mappings_dict.get(vda.diseaseid):
-                            if self.disgenet_id_mappings_dict.get(vda.diseaseid).get("MONDO"):
-                                diseaseid = "MONDO:" + self.disgenet_id_mappings_dict.get(vda.diseaseid).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(vda.diseaseid)
-                                for db, map_v in map_dict.items():                  
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):                        
-                                        diseaseid = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
+                    diseaseid = self.map_disgenet_disease_id_to_mondo_id(vda.diseaseid, return_pandas_none = False)
 
                     if diseaseid:
                         df_list.append((vda.geneid, diseaseid, vda.score, vda.variantid))
@@ -767,49 +859,32 @@ class Disease:
                 self.prepare_disgenet_id_mappings()
         if not hasattr(self, "disgenet_dda_gene") or not hasattr(self, "disgenet_dda_variant"):
             self.download_disgenet_data()
-        
-        disgenet_dbs_to_mondo_dbs = {"DO":"DOID", "EFO":"EFO", "HPO":"HP", "MSH":"MESH", "NCI":"NCIT", "ICD10CM":"ICD10CM",
-                            "OMIM":"OMIM"}
+            
         if from_csv:
             print("Processing Disgenet disease-disease data from csv")
             t0 = time()
             
+            def rounder(value):
+                res = round(value, 3)
+                if res != 0.0:
+                    return res
+                else:
+                    return np.nan                
+            
             # DISEASE-DISEASE BY GENE
             disgenet_dda_gene_df = pd.read_csv("disgenet_dda_gene.csv")
             disgenet_dda_gene_df = disgenet_dda_gene_df[["diseaseid1", "diseaseid2", "jaccard_genes"]]
-                        
-            df_list = []
-            for _, dda in disgenet_dda_gene_df.iterrows():
-                if round(dda["jaccard_genes"], 3) != 0.0:
-                    diseaseid1 = self.mondo_mappings["UMLS"].get(dda["diseaseid1"])
-                    diseaseid2 = self.mondo_mappings["UMLS"].get(dda["diseaseid2"])
-                    
-                    if not diseaseid1:
-                        if self.disgenet_id_mappings_dict.get(dda["diseaseid1"]):
-                            if self.disgenet_id_mappings_dict.get(dda["diseaseid1"]).get("MONDO"):                    
-                                diseaseid1 = "MONDO:" + self.disgenet_id_mappings_dict.get(dda["diseaseid1"]).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(dda["diseaseid1"])
-                                for db, map_v in map_dict.items():
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):
-                                        diseaseid1 = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
-                                        
-                    if not diseaseid2:
-                        if self.disgenet_id_mappings_dict.get(dda["diseaseid2"]):
-                            if self.disgenet_id_mappings_dict.get(dda["diseaseid2"]).get("MONDO"):
-                                diseaseid2 = "MONDO:" + self.disgenet_id_mappings_dict.get(dda["diseaseid2"]).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(dda["diseaseid2"])
-                                for db, map_v in map_dict.items():
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):
-                                        diseaseid2 = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
-                                            
-                    if diseaseid1 and diseaseid2:
-                        df_list.append((diseaseid1, diseaseid2, round(dda["jaccard_genes"], 3),))
-                
-            disgenet_dda_gene_df = pd.DataFrame(df_list, columns=["disease_id1", "disease_id2", "disgenet_jaccard_genes_score"])
+            
+            disgenet_dda_gene_df["diseaseid1"] = disgenet_dda_gene_df["diseaseid1"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
+            disgenet_dda_gene_df["diseaseid2"] = disgenet_dda_gene_df["diseaseid2"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
+            
+            disgenet_dda_gene_df["jaccard_genes"] = disgenet_dda_gene_df["jaccard_genes"].apply(rounder)
+            disgenet_dda_gene_df.dropna(subset="jaccard_genes", inplace=True)
+            
+            disgenet_dda_gene_df.rename({"diseaseid1":"disease_id1", "diseaseid2":"disease_id2", 
+                                            "jaccard_genes":"disgenet_jaccard_genes_score"},
+                                           inplace=True)
+            
             disgenet_dda_gene_df["source"] = "Disgenet Disease-Disease Gene"
             
             disgenet_dda_gene_df.sort_values(by="disgenet_jaccard_genes_score", ascending=False, ignore_index=True, inplace=True)
@@ -819,38 +894,16 @@ class Disease:
             disgenet_dda_variant_df = pd.read_csv("disgenet_dda_variant.csv")
             disgenet_dda_variant_df = disgenet_dda_variant_df[["diseaseid1", "diseaseid2", "jaccard_variants"]]
             
-            df_list = []
-            for _, dda in disgenet_dda_variant_df.iterrows():
-                if round(dda["jaccard_variants"], 3) != 0.0:
-                    diseaseid1 = self.mondo_mappings["UMLS"].get(dda["diseaseid1"])
-                    diseaseid2 = self.mondo_mappings["UMLS"].get(dda["diseaseid2"])
-                    
-                    if not diseaseid1:
-                        if self.disgenet_id_mappings_dict.get(dda["diseaseid1"]):
-                            if self.disgenet_id_mappings_dict.get(dda["diseaseid1"]).get("MONDO"):                    
-                                diseaseid1 = "MONDO:" + self.disgenet_id_mappings_dict.get(dda["diseaseid1"]).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(dda["diseaseid1"])
-                                for db, map_v in map_dict.items():
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):
-                                        diseaseid1 = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
-                                        
-                    if not diseaseid2:
-                        if self.disgenet_id_mappings_dict.get(dda["diseaseid2"]):
-                            if self.disgenet_id_mappings_dict.get(dda["diseaseid2"]).get("MONDO"):
-                                diseaseid2 = "MONDO:" + self.disgenet_id_mappings_dict.get(dda["diseaseid2"]).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(dda["diseaseid2"])
-                                for db, map_v in map_dict.items():
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):
-                                        diseaseid2 = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
-
-                    if diseaseid1 and diseaseid2:
-                        df_list.append((diseaseid1, diseaseid2, round(dda["jaccard_variants"], 3),))
-
-            disgenet_dda_variant_df = pd.DataFrame(df_list, columns=["disease_id1", "disease_id2", "disgenet_jaccard_variants_score"])
+            disgenet_dda_variant_df["diseaseid1"] = disgenet_dda_variant_df["diseaseid1"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
+            disgenet_dda_variant_df["diseaseid2"] = disgenet_dda_variant_df["diseaseid2"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
+            
+            disgenet_dda_variant_df["jaccard_variants"] = disgenet_dda_variant_df["jaccard_variants"].apply(rounder)
+            disgenet_dda_variant_df.dropna(subset="jaccard_variants", inplace=True)
+            
+            disgenet_dda_variant_df.rename({"diseaseid1":"disease_id1", "diseaseid2":"disease_id2", 
+                                            "jaccard_variants":"disgenet_jaccard_variants_score"},
+                                           inplace=True)
+            
             disgenet_dda_variant_df["source"] = "Disgenet Disease-Disease Variant"
             
             disgenet_dda_variant_df.sort_values(by="disgenet_jaccard_variants_score", ascending=False, ignore_index=True, inplace=True)
@@ -868,30 +921,8 @@ class Disease:
             # DISEASE-DISEASE BY GENE
             for dda in self.disgenet_dda_gene:
                 if round(dda.jaccard_genes, 3) != 0.0:
-                    diseaseid1 =  self.mondo_mappings["UMLS"].get(dda.diseaseid1)
-                    diseaseid2 = self.mondo_mappings["UMLS"].get(dda.diseaseid2)
-                    
-                    if not diseaseid1:
-                        if self.disgenet_id_mappings_dict.get(dda.diseaseid1):
-                            if self.disgenet_id_mappings_dict.get(dda.diseaseid1).get("MONDO"):                    
-                                diseaseid1 = "MONDO:" + self.disgenet_id_mappings_dict.get(dda.diseaseid1).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(dda.diseaseid1)
-                                for db, map_v in map_dict.items():
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):
-                                        diseaseid1 = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
-                                        
-                    if not diseaseid2:
-                        if self.disgenet_id_mappings_dict.get(dda.diseaseid2):
-                            if self.disgenet_id_mappings_dict.get(dda.diseaseid2).get("MONDO"):
-                                diseaseid2 = "MONDO:" + self.disgenet_id_mappings_dict.get(dda.diseaseid2).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(dda.diseaseid2)
-                                for db, map_v in map_dict.items():
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):
-                                        diseaseid2 = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
+                    diseaseid1 = self.map_disgenet_disease_id_to_mondo_id(dda.diseaseid1, return_pandas_none = False)
+                    diseaseid2 = self.map_disgenet_disease_id_to_mondo_id(dda.diseaseid2, return_pandas_none = False)
                                         
                     if diseaseid1 and diseaseid2:
                         df_list.append((diseaseid1, diseaseid2, round(dda.jaccard_genes, 3),))
@@ -906,30 +937,8 @@ class Disease:
             # DISEASE-DISEASE BY VARIANT
             for dda in self.disgenet_dda_variant:
                 if round(dda.jaccard_variants, 3) != 0.0:
-                    diseaseid1 =  self.mondo_mappings["UMLS"].get(dda.diseaseid1)
-                    diseaseid2 = self.mondo_mappings["UMLS"].get(dda.diseaseid2)
-                    
-                    if not diseaseid1:
-                        if self.disgenet_id_mappings_dict.get(dda.diseaseid1):
-                            if self.disgenet_id_mappings_dict.get(dda.diseaseid1).get("MONDO"):                    
-                                diseaseid1 = "MONDO:" + self.disgenet_id_mappings_dict.get(dda.diseaseid1).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(dda.diseaseid1)
-                                for db, map_v in map_dict.items():
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):
-                                        diseaseid1 = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
-                                        
-                    if not diseaseid2:
-                        if self.disgenet_id_mappings_dict.get(dda.diseaseid2):
-                            if self.disgenet_id_mappings_dict.get(dda.diseaseid2).get("MONDO"):
-                                diseaseid2 = "MONDO:" + self.disgenet_id_mappings_dict.get(dda.diseaseid2).get("MONDO")
-                            else:
-                                map_dict = self.disgenet_id_mappings_dict.get(dda.diseaseid2)
-                                for db, map_v in map_dict.items():
-                                    if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):
-                                        diseaseid2 = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
-                                        break
+                    diseaseid1 = self.map_disgenet_disease_id_to_mondo_id(dda.diseaseid1, return_pandas_none = False)
+                    diseaseid2 = self.map_disgenet_disease_id_to_mondo_id(dda.diseaseid2, return_pandas_none = False)
                                         
                     if diseaseid1 and diseaseid2:
                         df_list.append((diseaseid1, diseaseid2, round(dda.jaccard_variants, 3),))
@@ -972,6 +981,97 @@ class Disease:
         
         t1 = time()
         print(f"Disease-drug edge data is merged in {round((t1-t0) / 60, 2)} mins")
+        
+        return merged_df
+    
+    def merge_gene_disease_edge_data(self):
+        
+        opentargets_df = self.process_opentargets_gene_disease()
+        
+        diseases_knowledge_df, diseases_experimental_df = self.process_diseases_gene_disease()
+        
+        humsavar_df = self.process_humsavar_gene_disease()
+               
+        kegg_df = self.process_kegg_gene_disease()
+        
+        disgenet_gda_df, disgenet_vda_df = self.process_disgenet_gene_disease()
+        
+        clinvar_df = self.process_clinvar_gene_disease()
+        
+        print("Started merging gene-disease data")
+        t0 = time()
+        
+        # MERGE DISEASES KNOWLEDGE AND EXPERIMENTAL DATA
+        diseases_df = pd.merge(diseases_knowledge_df, diseases_experimental_df, how="outer", on=["gene_id", "disease_id"])
+        
+        diseases_df["source"] = diseases_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        diseases_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        # MERGE DISGENET GENE-DISEASE AND VARIANT-DISEASE ASSOCIATION DATA
+        disgenet_df = pd.merge(disgenet_gda_df, disgenet_vda_df, how="outer", on=["gene_id", "disease_id"])
+        
+        disgenet_df["source"] = disgenet_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        disgenet_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        # MERGE OPENTARGETS AND DISEASES DATA
+        merged_df = opentargets_df.merge(diseases_df, how="outer", on=["gene_id", "disease_id"])
+        
+        merged_df["source"] = merged_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        # MERGE OPENTARGETS+DISEASES AND KEGG DATA      
+        merged_df = merged_df.merge(kegg_df, how="outer", on=["gene_id", "disease_id"])
+        
+        merged_df["source"] = merged_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        # MERGE OPENTARGETS+DISEASES+KEGG AND CLINVAR DATA
+        merged_df = merged_df.merge(clinvar_df, how="outer", on=["gene_id", "disease_id"])
+        
+        merged_df["source"] = merged_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        # MERGE OPENTARGETS+DISEASES+KEGG+CLINVAR AND HUMSAVAR DATA
+        merged_df = merged_df.merge(humsavar_df, how="outer", on=["gene_id", "disease_id"])
+        
+        merged_df["source"] = merged_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        # merge variant_source column
+        merged_df["variant_source"] = merged_df[["variant_source_x", "variant_source_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["variant_source_x", "variant_source_y"], inplace=True)
+        
+        # merge dbsnp_id column
+        merged_df["dbsnp_id"] = merged_df[["dbsnp_id_x", "dbsnp_id_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["dbsnp_id_x", "dbsnp_id_y"], inplace=True)
+        
+        # MERGE OPENTARGETS+DISEASES+KEGG+CLINVAR+HUMSAVAR AND DISGENET DATA
+        merged_df = merged_df.merge(disgenet_df, how="outer", on=["gene_id", "disease_id"])
+        
+        merged_df["source"] = merged_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        # merge variant_source column
+        merged_df["variant_source"] = merged_df[["variant_source_x", "variant_source_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["variant_source_x", "variant_source_y"], inplace=True)
+        
+        # merge dbsnp_id column
+        merged_df["dbsnp_id"] = merged_df[["dbsnp_id_x", "dbsnp_id_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["dbsnp_id_x", "dbsnp_id_y"], inplace=True)
+        
+        t1 = time()
+        print(f"Gene-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
         
         return merged_df
             
@@ -1070,17 +1170,6 @@ class Disease:
     def get_gene_disease_edges(self): # GENE-DISEASE'E PROCESS GEREKİYOR
         print("Preparing gene-disease edges")
         
-        if not hasattr(self, "mondo_mappings"):
-            self.prepare_mappings()
-            
-        for interaction in tqdm(self.ctdbase_gda):
-            if interaction.PubMedIDs:
-                db = interaction.DiseaseID.split(":")[0]
-                if self.mondo_mappings[db].get(interaction.DiseaseID.split(":")[1], None):
-                    disease_id = self.mondo_mappings[db].get(interaction.DiseaseID.split(":")[1])
-                    gene_id = interaction.GeneID
-                    
-                    _dict = interaction._asdict()
         
     
     def add_prefix_to_id(self, prefix=None, identifier=None, sep=":") -> str:
@@ -1109,6 +1198,31 @@ class Disease:
             return element
         else:
             return [element]
+        
+    def map_disgenet_disease_id_to_mondo_id(self, disgenet_id, return_pandas_none = True):
+        
+        disgenet_dbs_to_mondo_dbs = {"DO":"DOID", "EFO":"EFO", "HPO":"HP", "MSH":"MESH", "NCI":"NCIT", "ICD10CM":"ICD10CM",
+                            "OMIM":"OMIM"}
+        
+        diseaseid = self.mondo_mappings["UMLS"].get(disgenet_id)
+
+        if not diseaseid:
+            if self.disgenet_id_mappings_dict.get(disgenet_id):
+                if self.disgenet_id_mappings_dict.get(disgenet_id).get("MONDO"):
+                    diseaseid = "MONDO:" + self.disgenet_id_mappings_dict.get(disgenet_id).get("MONDO")
+                else:
+                    map_dict = self.disgenet_id_mappings_dict.get(disgenet_id)
+                    for db, map_v in map_dict.items():                  
+                        if self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v):                        
+                            diseaseid = self.mondo_mappings[disgenet_dbs_to_mondo_dbs[db]].get(map_v)
+                            break
+                            
+        if diseaseid:
+            return diseaseid
+        elif return_pandas_none:
+            return np.nan
+        else:
+            return None
         
     def ensembl_transcript_to_ensembl_gene(self, enst_ids):
         enst_id_list = [e.split(" ")[0].split(".")[0] for e in enst_ids.split(";") if e]
