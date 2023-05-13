@@ -642,9 +642,13 @@ class Disease:
                 
                 if diseases_set:
                     review_status = review_status_dict[var.review_status]
+                    dbsnp_id = var.rs
+                    if dbsnp_id:
+                        dbsnp_id = "rs"+str(dbsnp_id)
+                        
                     for d in diseases_set:
                         df_list.append((var.entrez, d, var.allele, var.clinical_significance, review_status,
-                                       "rs"+str(var.rs), var.variation_id)) # NELER EKLENECEK?
+                                       dbsnp_id, var.variation_id)) # NELER EKLENECEK?
                         
         df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "allele_id", "clinical_significance",
                                            "review_status", "dbsnp_id", "variation_id"])
@@ -742,6 +746,7 @@ class Disease:
                         df_list.append((gene_id, disease_id))
                         
         df = pd.DataFrame(df_list, columns=["gene_id", "disease_id"])
+        df["source"] = "KEGG"
         
         df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
         
@@ -799,7 +804,8 @@ class Disease:
                 else:
                     return np.nan                
             
-            disgenet_vda_df["gene_id"] = disgenet_vda_df["gene_symbol"].apply(map_gene_symbol_to_geneid)            
+            disgenet_vda_df["gene_id"] = disgenet_vda_df["gene_symbol"].apply(map_gene_symbol_to_geneid)
+            disgenet_vda_df.drop(columns="gene_symbol", inplace=True)
             disgenet_vda_df.dropna(subset="gene_id", inplace=True)
             
             disgenet_vda_df["source"] = "Disgenet Variant-Disease"
@@ -877,15 +883,16 @@ class Disease:
             
             disgenet_dda_gene_df["diseaseid1"] = disgenet_dda_gene_df["diseaseid1"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
             disgenet_dda_gene_df["diseaseid2"] = disgenet_dda_gene_df["diseaseid2"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
+            disgenet_dda_gene_df.dropna(subset=["diseaseid1", "diseaseid2"], inplace=True)
             
             disgenet_dda_gene_df["jaccard_genes"] = disgenet_dda_gene_df["jaccard_genes"].apply(rounder)
             disgenet_dda_gene_df.dropna(subset="jaccard_genes", inplace=True)
             
-            disgenet_dda_gene_df.rename({"diseaseid1":"disease_id1", "diseaseid2":"disease_id2", 
-                                            "jaccard_genes":"disgenet_jaccard_genes_score"},
-                                           inplace=True)
+            disgenet_dda_gene_df.rename(columns={"diseaseid1":"disease_id1", "diseaseid2":"disease_id2", 
+                                            "jaccard_genes":"disgenet_jaccard_genes_score"}, inplace=True)
             
             disgenet_dda_gene_df["source"] = "Disgenet Disease-Disease Gene"
+            
             
             disgenet_dda_gene_df.sort_values(by="disgenet_jaccard_genes_score", ascending=False, ignore_index=True, inplace=True)
             disgenet_dda_gene_df.drop_duplicates(subset=["disease_id1", "disease_id2"], ignore_index=True, inplace=True)
@@ -896,11 +903,13 @@ class Disease:
             
             disgenet_dda_variant_df["diseaseid1"] = disgenet_dda_variant_df["diseaseid1"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
             disgenet_dda_variant_df["diseaseid2"] = disgenet_dda_variant_df["diseaseid2"].apply(self.map_disgenet_disease_id_to_mondo_id, return_pandas_none = True)
+            disgenet_dda_variant_df.dropna(subset=["diseaseid1", "diseaseid2"], inplace=True)
+            
             
             disgenet_dda_variant_df["jaccard_variants"] = disgenet_dda_variant_df["jaccard_variants"].apply(rounder)
             disgenet_dda_variant_df.dropna(subset="jaccard_variants", inplace=True)
             
-            disgenet_dda_variant_df.rename({"diseaseid1":"disease_id1", "diseaseid2":"disease_id2", 
+            disgenet_dda_variant_df.rename(columns={"diseaseid1":"disease_id1", "diseaseid2":"disease_id2", 
                                             "jaccard_variants":"disgenet_jaccard_variants_score"},
                                            inplace=True)
             
@@ -1013,7 +1022,7 @@ class Disease:
         
         disgenet_df["source"] = disgenet_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
         
-        disgenet_df.drop(columns=["source_x", "source_y"], inplace=True)
+        disgenet_df.drop(columns=["source_x", "source_y"], inplace=True)        
         
         # MERGE OPENTARGETS AND DISEASES DATA
         merged_df = opentargets_df.merge(diseases_df, how="outer", on=["gene_id", "disease_id"])
@@ -1053,6 +1062,8 @@ class Disease:
         
         merged_df.drop(columns=["dbsnp_id_x", "dbsnp_id_y"], inplace=True)
         
+        merged_df.replace("", np.nan, inplace=True)
+        
         # MERGE OPENTARGETS+DISEASES+KEGG+CLINVAR+HUMSAVAR AND DISGENET DATA
         merged_df = merged_df.merge(disgenet_df, how="outer", on=["gene_id", "disease_id"])
         
@@ -1070,11 +1081,31 @@ class Disease:
         
         merged_df.drop(columns=["dbsnp_id_x", "dbsnp_id_y"], inplace=True)
         
+        
+        merged_df.replace("", np.nan, inplace=True)
+        
         t1 = time()
         print(f"Gene-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
         
         return merged_df
-            
+    
+    def merge_disease_disease_edge_data(self):
+        disgenet_dda_gene_df, disgenet_dda_variant_df = self.process_disgenet_disease_disease()
+        
+        print("Started merging gene-disease data")
+        t0 = time()
+        
+        merged_df = disgenet_dda_gene_df.merge(disgenet_dda_variant_df, how="outer", on=["disease_id1", "disease_id2"])
+        
+        merged_df["source"] = merged_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        merged_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        t1 = time()
+        print(f"Disease-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
+        
+        return merged_df       
+        
     def get_nodes(self, label="disease") -> list:
         print("Preparing Disease nodes")
         
@@ -1121,13 +1152,14 @@ class Disease:
         return edge_list
         
     def get_organism_disease_edges(self, label="causes") -> list:
-        print("Preparing organism-disease edges")
         
         if not hasattr(self, "pathopheno_organism_disease_int"):
             self.download_pathophenodb_data()
         
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
+            
+        print("Preparing organism-disease edges")
             
         edge_list = []
         
@@ -1142,9 +1174,10 @@ class Disease:
         return edge_list
     
     def get_disease_drug_edges(self, label="disease_is_treated_by_drug"):
-        print("Started writing disease-drug edges")
         
         disease_drug_edges_df = self.merge_disease_drug_edge_data()
+        
+        print("Started writing disease-drug edges")
         
         edge_list = []
         for index, row in tqdm(disease_drug_edges_df.iterrows(), total=disease_drug_edges_df.shape[0]):
@@ -1167,10 +1200,61 @@ class Disease:
         
         return edge_list
         
-    def get_gene_disease_edges(self): # GENE-DISEASE'E PROCESS GEREKİYOR
+    def get_gene_disease_edges(self, label="gene_is_related_to_disease"):
+        
+        gene_disease_edges_df = self.merge_gene_disease_edge_data()
+        
         print("Preparing gene-disease edges")
         
+        edge_list = []
         
+        for index, row in tqdm(gene_disease_edges_df.iterrows(), total=gene_disease_edges_df.shape[0]):
+            _dict = row.to_dict()
+            
+            gene_id = self.add_prefix_to_id(prefix="ncbigene", identifier=_dict["gene_id"])
+            disease_id = self.add_prefix_to_id(prefix="MONDO", identifier=_dict["disease_id"])
+            
+            del _dict["disease_id"], _dict["gene_id"]
+            
+            props = {}
+            for k, v in _dict.items():
+                if str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[k] = v.split("|")
+                    elif k == "review_status":
+                        props[k] = int(v)
+                    else:
+                        props[k] = v
+                        
+            edge_list.append((None, gene_id, disease_id, label, props))
+            
+        return edge_list
+    
+    def get_disease_disease_edges(self, label="disease_is_associated_with_disease"):
+        disease_disease_edges_df = self.merge_disease_disease_edge_data()
+        
+        print("Started writing disease-disease edges")
+
+        edge_list = []
+        for index, row in tqdm(disease_disease_edges_df.iterrows(), total=disease_disease_edges_df.shape[0]):
+            _dict = row.to_dict()
+            
+            disease_id1 = self.add_prefix_to_id(prefix="MONDO", identifier=_dict["disease_id1"])
+            disease_id2 = self.add_prefix_to_id(prefix="MONDO", identifier=_dict["disease_id2"])
+            
+            del _dict["disease_id1"], _dict["disease_id2"]
+            
+            props = {}
+            for k, v in _dict.items():
+                if str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[k] = v.split("|")
+                    else:
+                        props[k] = v
+                        
+            edge_list.append((None, disease_id1, disease_id2, label, props))            
+        
+        return edge_list
     
     def add_prefix_to_id(self, prefix=None, identifier=None, sep=":") -> str:
         """
