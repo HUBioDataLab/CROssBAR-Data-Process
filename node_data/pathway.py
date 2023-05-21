@@ -44,6 +44,15 @@ class Pathway:
 
             if not cache:
                 stack.enter_context(curl.cache_off())
+                
+            
+            self.download_reactome_data()
+            
+            self.download_kegg_data()
+            
+            self.download_ctd_data()
+            
+            self.download_compath_data()
     
     def download_reactome_data(self):
         print("Started downloading Reactome data")
