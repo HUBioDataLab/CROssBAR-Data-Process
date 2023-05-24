@@ -1,3 +1,24 @@
+from __future__ import annotations
+from pypath.share import curl, settings
+
+from pypath.inputs import reactome, uniprot, ctdbase, compath, unichem, drugbank
+from pypath.inputs import ontology
+import kegg_local
+
+from contextlib import ExitStack
+
+from bioregistry import normalize_curie
+from tqdm.notebook import tqdm
+from time import time
+import collections
+
+from typing import Union
+
+from enum import Enum, auto
+
+import pandas as pd
+import numpy as np
+
 class PathwayEdgeType(Enum):
     PROTEIN_TO_PATHWAY = auto()
     REACTOME_HIERARCHICAL_RELATIONS = auto()
@@ -390,6 +411,8 @@ class Pathway:
         
         edge_list.extend(self.get_reactome_hierarchical_edges())
         
+        edge_list.extend(self.get_pathway_pathway_orthology_edges())
+        
         return edge_list
         
     def get_protein_pathway_edges(self, label="protein_take_part_in_pathway"):
@@ -527,6 +550,51 @@ class Pathway:
             
             edge_list.append((None, child_id, parent_id, label, {}))
             
+        return edge_list
+    
+    def get_pathway_pathway_orthology_edges(self, label="pathway_is_ortholog_to_pathway"):
+        if not hasattr(self, "kegg_pathways"):
+            self.download_kegg_data()
+        
+        if not hasattr(self, "reactome_pathways"):
+            self.download_reactome_data()
+            
+        edge_list = []        
+        for p1 in tqdm(self.kegg_pathways):
+            p1_prefix = p1[0][:3]    
+            p1_prefix_removed = p1[0][3:]
+
+            if p1_prefix != "hsa": # hsa can be removed later. takes only human pathway orthologs
+                continue
+
+            for p2 in self.kegg_pathways:
+                if p1 == p2:
+                    continue
+
+                p2_prefix_removed = p2[0][3:]
+
+                if p1_prefix_removed == p2_prefix_removed:
+                    pathway1_id =self.add_prefix_to_id(prefix="kegg.pathway", identifier=p1[0])
+                    pathway2_id = self.add_prefix_to_id(prefix="kegg.pathway", identifier=p2[0])                    
+                    edge_list.append((None, pathway1_id, pathway2_id, label, {}))
+        
+        
+        
+        for p1 in tqdm(self.reactome_pathways):
+            if p1.pathway_id.split("-")[1] == "HSA": # HSA can be removed later. takes only human pathway orthologs
+                p1_id_last_element = p1.pathway_id.split("-")[-1]
+
+                for p2 in self.reactome_pathways:
+                    p2_id_last_element = p2.pathway_id.split("-")[-1]
+
+                    if p1.pathway_id == p2.pathway_id:
+                        continue
+                        
+                    if p1_id_last_element == p2_id_last_element:
+                        pathway1_id =self.add_prefix_to_id(prefix="kegg.pathway", identifier=p1.pathway_id)
+                        pathway2_id = self.add_prefix_to_id(prefix="kegg.pathway", identifier=p2.pathway_id)
+                        edge_list.append((None, pathway1_id, pathway2_id, label, {}))
+                        
         return edge_list
     
     def prepare_mondo_mappings(self):        
