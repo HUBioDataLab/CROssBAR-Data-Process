@@ -45,6 +45,12 @@ class SideEffect:
             if not cache:
                 stack.enter_context(curl.cache_off())
                 
+            self.dowload_sider_data()
+            
+            self.download_offsides_data()
+            
+            self.download_adrecs_data()
+                
     
     def dowload_sider_data(self):
         
@@ -60,6 +66,7 @@ class SideEffect:
         
         sider_meddra_tsv = sider.sider_meddra_tsv()
         self.umls_to_meddra_id = {i.cid:{"meddra_id":i.meddra_id, "name":i.side_effect_name} for i in sider_meddra_tsv}
+        self.meddra_id_to_side_effect_name = {i.meddra_id:i.side_effect_name for i in sider_meddra_tsv}
         
         self.sider_meddra_with_freq = sider.sider_meddra_with_freq()
         
@@ -91,6 +98,9 @@ class SideEffect:
         self.adrecs_terminology = adrecs.adrecs_terminology()
         
         self.adrecs_adr_id_to_adrecs_drug_id = {dr.adr_id: dr.drug_id for dr in adrecs.adrecs_drugs()}
+        self.adrecs_adr_id_to_meddra_id = {entry.adr_id:str(entry.meddra_code) for entry in self.adrecs_terminology}
+        
+        self.adrecs_ontology = adrecs.adrecs_extract_child_parent_relationship()
         
         t1 = time()
         print(f"ADReCS data is downloaded in {round((t1-t0) / 60, 2)} mins")
@@ -195,7 +205,45 @@ class SideEffect:
         
         return merged_df
     
-    def drug_side_effect_edges(self, label="drug_has_side_effect"):
+    def get_nodes(self, label="side_effect"):
+        if not hasattr(self, "meddra_id_to_side_effect_name"):
+            sider_meddra_tsv = sider.sider_meddra_tsv()
+            self.meddra_id_to_side_effect_name = {i.meddra_id:i.side_effect_name for i in sider_meddra_tsv}
+            
+        if not hasattr(self, "offsides_data"):
+            self.offsides_data = offsides.offsides()
+            
+        if not hasattr(self, "adrecs_terminology"):
+            self.adrecs_terminology = adrecs.adrecs_terminology()
+            
+            
+        for entry in  self.offsides_data:
+            if entry.condition_meddra_id not in self.meddra_id_to_side_effect_name.keys():
+                self.meddra_id_to_side_effect_name[entry.condition_meddra_id] = entry.condition_concept_name
+          
+        adr_synonyms_dict = {}
+        for entry in self.adrecs_terminology:
+            if str(entry.meddra_code) not in self.meddra_id_to_side_effect_name.keys():
+                self.meddra_id_to_side_effect_name[str(entry.meddra_code)] = entry.adr_term
+                
+            if entry.adr_synonyms:
+                adr_synonyms_dict[str(entry.meddra_code)] = list(entry.adr_synonyms)
+                
+        print("Started writing side effect edges")
+        
+        node_list = []
+        for meddra_term, condition_name in tqdm(self.meddra_id_to_side_effect_name.items()):
+            props = {"name":condition_name}
+            
+            if adr_synonyms_dict.get(meddra_term):
+                props["synonyms"] = adr_synonyms_dict[meddra_term]
+                
+            meddra_id = self.add_prefix_to_id(prefix="meddra", identifier=meddra_term)
+            node_list.append((meddra_id, label, props))
+            
+        return node_list
+            
+    def get_drug_side_effect_edges(self, label="drug_has_side_effect"):
         drug_side_effect_edges_df = self.merge_drug_side_effect_data()
         
         print("Started writing drug-side effect edges")
@@ -220,6 +268,19 @@ class SideEffect:
             edge_list.append((None, drug_id, meddra_id, label, props))
             
         return edge_list
+    
+    def get_adrecs_side_effect_hierarchical_edges(self, label="side_effect_is_a_side_effect"):
+        if not hasattr(self, "adrecs_ontology"):
+            self.download_adrecs_data()
+           
+        edge_list = []
+        for relation in tqdm(self.adrecs_ontology):
+            if self.adrecs_adr_id_to_meddra_id.get(relation.child_adr_id) and self.adrecs_adr_id_to_meddra_id.get(relation.parent_adr_id):
+                child_id = self.add_prefix_to_id(prefix="meddra", identifier=self.adrecs_adr_id_to_meddra_id[relation.child_adr_id])
+                parent_id = self.add_prefix_to_id(prefix="meddra", identifier=self.adrecs_adr_id_to_meddra_id[relation.parent_adr_id])
+                edge_list.append((None, child_id, parent_id, label, {}))
+                
+        return edge_list 
         
     def add_prefix_to_id(self, prefix=None, identifier=None, sep=":") -> str:
         """
