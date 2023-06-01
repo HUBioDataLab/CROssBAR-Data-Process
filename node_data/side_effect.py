@@ -242,6 +242,18 @@ class SideEffect:
             node_list.append((meddra_id, label, props))
             
         return node_list
+    
+    def get_edges(self):
+        
+        print("Started writing ALL edge types")
+        
+        edge_list = []
+        
+        edge_list.extend(self.get_drug_side_effect_edges())
+        
+        edge_list.extend(self.get_adrecs_side_effect_hierarchical_edges())
+        
+        return edge_list
             
     def get_drug_side_effect_edges(self, label="drug_has_side_effect"):
         drug_side_effect_edges_df = self.merge_drug_side_effect_data()
