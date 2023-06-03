@@ -894,8 +894,9 @@ class Disease:
             disgenet_dda_gene_df["source"] = "Disgenet Disease-Disease Gene"
             
             
-            disgenet_dda_gene_df.sort_values(by="disgenet_jaccard_genes_score", ascending=False, ignore_index=True, inplace=True)
-            disgenet_dda_gene_df.drop_duplicates(subset=["disease_id1", "disease_id2"], ignore_index=True, inplace=True)
+            disgenet_dda_gene_df.sort_values(by="disgenet_jaccard_genes_score", ascending=False, ignore_index=True, inplace=True)            
+            disgenet_dda_gene_df[~disgenet_dda_gene_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+    
             
             # DISEASE-DISEASE BY VARIANT
             disgenet_dda_variant_df = pd.read_csv("disgenet_dda_variant.csv")
@@ -916,7 +917,7 @@ class Disease:
             disgenet_dda_variant_df["source"] = "Disgenet Disease-Disease Variant"
             
             disgenet_dda_variant_df.sort_values(by="disgenet_jaccard_variants_score", ascending=False, ignore_index=True, inplace=True)
-            disgenet_dda_variant_df.drop_duplicates(subset=["disease_id1", "disease_id2"], ignore_index=True, inplace=True)
+            disgenet_dda_variant_df[~disgenet_dda_variant_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
             
             t1 = time()
             print(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
@@ -940,7 +941,7 @@ class Disease:
             disgenet_dda_gene_df["source"] = "Disgenet Disease-Disease Gene"
             
             disgenet_dda_gene_df.sort_values(by="disgenet_jaccard_genes_score", ascending=False, ignore_index=True, inplace=True)
-            disgenet_dda_gene_df.drop_duplicates(subset=["disease_id1", "disease_id2"], ignore_index=True, inplace=True)
+            disgenet_dda_gene_df[~disgenet_dda_gene_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
             
             df_list = []
             # DISEASE-DISEASE BY VARIANT
@@ -956,7 +957,7 @@ class Disease:
             disgenet_dda_variant_df["source"] = "Disgenet Disease-Disease Variant"
             
             disgenet_dda_variant_df.sort_values(by="disgenet_jaccard_variants_score", ascending=False, ignore_index=True, inplace=True)
-            disgenet_dda_variant_df.drop_duplicates(subset=["disease_id1", "disease_id2"], ignore_index=True, inplace=True)
+            disgenet_dda_variant_df[~disgenet_dda_variant_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
             
             t1 = time()
             print(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
