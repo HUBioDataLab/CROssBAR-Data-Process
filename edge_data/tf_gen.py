@@ -14,8 +14,10 @@ import pandas as pd
 import numpy as np
 
 class TFGen:
-    def __init__(self, organism=9606):
+    def __init__(self, organism=9606, add_prefix = True):
         self.organism = organism
+        self.add_prefix = add_prefix
+        
         
         self.effect_mapping = {0:"Unknown", 1:"Activation", -1:"Repression"}
     
@@ -26,7 +28,7 @@ class TFGen:
         retries=3,
     ):
         """
-        Wrapper function to download pathway data from various databases using pypath.
+        Wrapper function to download tf-gen relation data from various databases using pypath.
         Args
             cache: if True, it uses the cached version of the data, otherwise
             forces download.
@@ -49,6 +51,7 @@ class TFGen:
         print("Started downloading DoRothEA data")
         t0 = time()
         
+        # ONLY FOR HUMAN. LATER ADD MOUSE AS WELL
         self.dorothea_interactions = list(dorothea.dorothea_interactions(organism = self.organism, levels={"A", "B", "C"}))
         
         t1 = time()
@@ -243,6 +246,43 @@ class TFGen:
         print(f"Tf-gene edge data is merged in {round((t1-t0) / 60, 2)} mins")
         
         return merged_df
+    
+    def get_edges(self, label="gene_regulates_gene"):
+        
+        tf_gen_edges_df = self.merge_tf_gen_data()
+        
+        print("Started writing tf-gen edges")
+        
+        edge_list = []
+        for index, row in tqdm(tf_gen_edges_df.iterrows(), total=tf_gen_edges_df.shape[0]):
+            _dict = row.to_dict()
+            
+            tf_id = self.add_prefix_to_id(prefix="ncbigene", identifier=_dict["tf"])
+            target_id = self.add_prefix_to_id(prefix="ncbigene", identifier=_dict["target"])
+            
+            del _dict["tf"], _dict["target"]
+            
+            props = {}
+            for k, v in _dict.items():
+                if str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[k] = v.split("|")
+                    else:
+                        props[k] = v
+                        
+            edge_list.append((None, tf_id, target_id, label, props))
+            
+        return edge_list            
+            
+    def add_prefix_to_id(self, prefix=None, identifier=None, sep=":") -> str:
+        """
+        Adds prefix to database id
+        """
+        if self.add_prefix and identifier:
+            return normalize_curie(prefix + sep + str(identifier))
+        
+        return identifier
+        
         
     def map_gene_symbol_to_entrez_id(self, gene_symbol):
         return mapping.map_name(gene_symbol, "genesymbol", "entrez")
