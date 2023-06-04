@@ -66,6 +66,7 @@ class DiseaseEdgeType(Enum):
     GENE_TO_DISEASE = auto()
     DISEASE_TO_DRUG = auto()
     DISEASE_TO_DISEASE = auto()
+    DISEASE_COMOBORDITIY = auto()
     
 
 class GENE_TO_DISEASE_INTERACTION_FIELD(Enum):
@@ -380,11 +381,32 @@ class Disease:
 
                 except TypeError:
                     print(f'{disease_id} not available')
+                    
+    def download_malacards_data(self):
+        
+        if DiseaseEdgeType.DISEASE_COMOBORDITIY in self.edge_types:
+            t0 = time()
+            
+            with open("MalaCards.json", encoding="utf-8") as file:
+                file_content = file.read()
+            
+            malacards_external_ids = json.loads(file_content)
+            
+            self.prepare_malacards_mondo_mappings(malacards_external_ids)
+            
+            self.malacards_disease_slug_to_malacards_id = {entry["DiseaseSlug"]:entry["McId"] for entry in malacards_external_ids}
+            
+            with open("MalaCardsRelatedDiseases.json", encoding="utf-8") as file:
+                file_content = file.read()
+                
+            self.disease_comorbidity = json.loads(file_content)
+            
+            t1 = time()
+            print(f"Malacards disease comorbidity data is downloaded in {round((t1-t0) / 60, 2)} mins")
     
     def prepare_mappings(self):
         self.mondo_mappings = collections.defaultdict(dict)
-        mapping_db_list = ["UMLS", "DOID", "MESH", "OMIM", "EFO", "Orphanet", "HP", "ICD10CM", "NCIT"]
-        
+        mapping_db_list = ["UMLS", "DOID", "MESH", "OMIM", "EFO", "Orphanet", "HP", "ICD10CM", "NCIT"]        
         
         if not hasattr(self, "mondo"):
             self.download_mondo_data()
@@ -411,6 +433,35 @@ class Disease:
                     map_dict[m.vocabulary] = m.code.split(":")[1] if ":" in m.code else m.code
 
             self.disgenet_id_mappings_dict[disg_id] = map_dict
+            
+    def prepare_malacards_mondo_mappings(self, malacards_external_ids):
+        
+        if not hasattr(self, "mondo_mappings"):
+            self.prepare_mappings()
+            
+        malacards_dbs_to_mondo_dbs = {"OMIM®":"OMIM", "Disease Ontology":"DOID", "UMLS":"UMLS", "MeSH":"MESH", 
+                  "NCIt":"NCIT", "EFO":"EFO", "Orphanet":"Orphanet", "ICD10":"ICD10CM"}
+
+        self.malacards_id_to_mondo_id = {}
+        for entry in malacards_external_ids:
+            if entry["ExternalIds"]:
+                for external_id in entry["ExternalIds"]:
+
+                    if external_id["Source"] in malacards_dbs_to_mondo_dbs.keys():
+                        malacards_external_id = external_id["SourceAccession"]
+
+                        if external_id["Source"] == "Disease Ontology":
+                            malacards_external_id = malacards_external_id.split(":")[1]
+                        if external_id["Source"] == "EFO":
+                            malacards_external_id = malacards_external_id.split("_")[1]
+                        if external_id["Source"] == "Orphanet":
+                            malacards_external_id = malacards_external_id.replace("ORPHA","")                    
+
+                        db = malacards_dbs_to_mondo_dbs[external_id["Source"]]
+
+                        if self.mondo_mappings[db].get(malacards_external_id):
+                            self.malacards_id_to_mondo_id[entry["McId"]] = self.mondo_mappings[db].get(malacards_external_id)
+                            break
                         
     def process_ctd_chemical_disease(self):     
         
@@ -963,6 +1014,31 @@ class Disease:
             print(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
             
             return disgenet_dda_gene_df, disgenet_dda_variant_df
+        
+    def process_malacards_disease_comorbidity(self):
+        if not hasattr(self, "disease_comorbidity"):
+            self.download_malacards_data()
+            
+        print("Processing Malacards disease comorbidity data")
+        t0 = time()
+            
+        df_list = []
+        for disease in self.disease_comorbidity:
+            if disease["Comorbidities"] and self.malacards_id_to_mondo_id.get(disease["McId"]):
+                for comorbidity in disease["Comorbidities"]:
+                    if self.malacards_id_to_mondo_id.get(self.malacards_disease_slug_to_malacards_id.get(comorbidity["DiseaseSlug"])):
+                        disease1 = self.malacards_id_to_mondo_id.get(disease["McId"])
+                        disease2 = self.malacards_id_to_mondo_id.get(self.malacards_disease_slug_to_malacards_id.get(comorbidity["DiseaseSlug"]))
+                        df_list.append((disease1, disease2))
+                        
+        comorbidity_df = pd.DataFrame(df_list, columns=["disease1", "disease2"])
+        
+        comorbidity_df = comorbidity_df[~comorbidity_df[["disease1", "disease2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        
+        t1 = time()
+        print(f"Malacards disease comorbidity data is processed in {round((t1-t0) / 60, 2)} mins")
+        
+        return comorbidity_df
             
     def merge_disease_drug_edge_data(self) -> pd.DataFrame:
         # Prepare dataframes for merging
@@ -1255,6 +1331,22 @@ class Disease:
                         
             edge_list.append((None, disease_id1, disease_id2, label, props))            
         
+        return edge_list
+    
+    def get_disease_comorbidity_edges(self, label="disease_is_comorbid_with_disease"):
+        comorbidity_edges_df = self.process_malacards_disease_comorbidity()
+        
+        print("Started writing disease comorbidity edges")
+        
+        edge_list = []
+        
+        props = {}
+        for index, row in tqdm(comorbidity_edges_df.iterrows(), total=comorbidity_edges_df.shape[0]):
+            disease_id1 = self.add_prefix_to_id(prefix="MONDO", identifier=row["disease1"])
+            disease_id2 = self.add_prefix_to_id(prefix="MONDO", identifier=row["disease2"])
+            
+            edge_list.append((None, disease_id1, disease_id2, label, props))
+            
         return edge_list
     
     def add_prefix_to_id(self, prefix=None, identifier=None, sep=":") -> str:
