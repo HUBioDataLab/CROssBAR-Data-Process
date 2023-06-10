@@ -36,7 +36,7 @@ import pandas as pd
 
 class DiseaseNodeField(Enum):
     NAME = "name"
-    SYNONYMS = "obo_synonym"
+    SYNONYMS = "synonyms"
     
     # xrefs
     UMLS = "UMLS"
@@ -89,7 +89,7 @@ class Disease:
         self.add_prefix = add_prefix
         
         
-        self.set_node_and_edge_types(edge_types=edge_types)
+        self.set_node_and_edge_types(edge_types=self.ensure_iterable(edge_types))
         self.set_node_and_edge_fields(disease_node_fields=disease_node_fields)
     
     def download_disease_data(
@@ -129,7 +129,7 @@ class Disease:
     def download_mondo_data(self):
         fields = ["is_obsolete"]
         if DiseaseNodeField.SYNONYMS.value in self.disease_node_fields:
-            fields.append(DiseaseNodeField.SYNONYMS.value)
+            fields.append("obo_synonym")
             
         if set(DiseaseNodeField.get_xrefs()).intersection(set(self.disease_node_fields)):
             fields.append("obo_xref")
@@ -946,7 +946,7 @@ class Disease:
             
             
             disgenet_dda_gene_df.sort_values(by="disgenet_jaccard_genes_score", ascending=False, ignore_index=True, inplace=True)            
-            disgenet_dda_gene_df[~disgenet_dda_gene_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+            disgenet_dda_gene_df = disgenet_dda_gene_df[~disgenet_dda_gene_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
     
             
             # DISEASE-DISEASE BY VARIANT
@@ -968,7 +968,7 @@ class Disease:
             disgenet_dda_variant_df["source"] = "Disgenet Disease-Disease Variant"
             
             disgenet_dda_variant_df.sort_values(by="disgenet_jaccard_variants_score", ascending=False, ignore_index=True, inplace=True)
-            disgenet_dda_variant_df[~disgenet_dda_variant_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+            disgenet_dda_variant_df = disgenet_dda_variant_df[~disgenet_dda_variant_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
             
             t1 = time()
             print(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
@@ -992,7 +992,7 @@ class Disease:
             disgenet_dda_gene_df["source"] = "Disgenet Disease-Disease Gene"
             
             disgenet_dda_gene_df.sort_values(by="disgenet_jaccard_genes_score", ascending=False, ignore_index=True, inplace=True)
-            disgenet_dda_gene_df[~disgenet_dda_gene_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+            disgenet_dda_gene_df = disgenet_dda_gene_df[~disgenet_dda_gene_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
             
             df_list = []
             # DISEASE-DISEASE BY VARIANT
@@ -1008,7 +1008,7 @@ class Disease:
             disgenet_dda_variant_df["source"] = "Disgenet Disease-Disease Variant"
             
             disgenet_dda_variant_df.sort_values(by="disgenet_jaccard_variants_score", ascending=False, ignore_index=True, inplace=True)
-            disgenet_dda_variant_df[~disgenet_dda_variant_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+            disgenet_dda_variant_df = disgenet_dda_variant_df[~disgenet_dda_variant_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
             
             t1 = time()
             print(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
@@ -1169,7 +1169,7 @@ class Disease:
     def merge_disease_disease_edge_data(self):
         disgenet_dda_gene_df, disgenet_dda_variant_df = self.process_disgenet_disease_disease()
         
-        print("Started merging gene-disease data")
+        print("Started merging disease-disease data")
         t0 = time()
         
         merged_df = disgenet_dda_gene_df.merge(disgenet_dda_variant_df, how="outer", on=["disease_id1", "disease_id2"])
@@ -1184,6 +1184,9 @@ class Disease:
         return merged_df       
         
     def get_nodes(self, label="disease") -> list:
+        if not hasattr(self, "mondo"):
+            self.download_mondo_data()            
+            
         print("Preparing Disease nodes")
         
         node_list = []
@@ -1208,7 +1211,7 @@ class Disease:
                 if xref_dbs and term.obo_xref:
                     for xref in term.obo_xref:
                         if xref["database"] in xref_dbs:
-                            props[xref["database"]] = xref["id"]
+                            props[xref["database"].lower()] = xref["id"]
                             
                             
                 node_list.append((disease_id, label, props))
@@ -1216,6 +1219,9 @@ class Disease:
         return node_list
         
     def get_mondo_hiererchical_edges(self, label="disease_is_a_disease") -> list:
+        if not hasattr(self, "mondo_hierarchical_relations"):
+            self.download_mondo_data()
+            
         print("Preparing Mondo hiererchical edges")
         
         edge_list = []
@@ -1228,7 +1234,7 @@ class Disease:
 
         return edge_list
         
-    def get_organism_disease_edges(self, label="causes") -> list:
+    def get_organism_disease_edges(self, label="organism_causes_disease") -> list:
         
         if not hasattr(self, "pathopheno_organism_disease_int"):
             self.download_pathophenodb_data()
