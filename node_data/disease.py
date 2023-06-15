@@ -1034,6 +1034,8 @@ class Disease:
                         
         comorbidity_df = pd.DataFrame(df_list, columns=["disease1", "disease2"])
         
+        comorbidity_df = comorbidity_df[comorbidity_df["disease1"].ne(comorbidity_df["disease2"])]
+        
         comorbidity_df = comorbidity_df[~comorbidity_df[["disease1", "disease2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         t1 = time()
@@ -1178,6 +1180,8 @@ class Disease:
         merged_df["source"] = merged_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
         
         merged_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        merged_df = merged_df[merged_df["disease_id1"].ne(merged_df["disease_id2"])]
         
         t1 = time()
         print(f"Disease-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
