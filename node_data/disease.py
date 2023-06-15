@@ -281,8 +281,9 @@ class Disease:
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
             
+            #with curl.cache_off():                
             self.clinvar_variant_disease = clinvar.clinvar_raw()
-            
+
             self.clinvar_citation = clinvar.clinvar_citations()
             
             t1 = time()
@@ -699,7 +700,7 @@ class Disease:
                         
                     for d in diseases_set:
                         df_list.append((var.entrez, d, var.allele, var.clinical_significance, review_status,
-                                       dbsnp_id, var.variation_id)) # NELER EKLENECEK?
+                                       dbsnp_id, var.variation_id))
                         
         df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "allele_id", "clinical_significance",
                                            "review_status", "dbsnp_id", "variation_id"])
@@ -1199,12 +1200,12 @@ class Disease:
                 props = {}
                 
                 if DiseaseNodeField.NAME.value in self.disease_node_fields and term.label:
-                    props[DiseaseNodeField.NAME.value] = term.label
+                    props[DiseaseNodeField.NAME.value] = term.label.replace("'","^").replace("|",",")
                     
                 if DiseaseNodeField.SYNONYMS.value in self.disease_node_fields and term.obo_synonym:
                     synonym_set = set()
                     for syn in term.obo_synonym:
-                        synonym_set.add(syn["name"])
+                        synonym_set.add(syn["name"].replace("'","^").replace("|",","))
 
                     props[DiseaseNodeField.SYNONYMS.value] = list(synonym_set)
                     
