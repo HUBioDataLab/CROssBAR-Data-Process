@@ -483,6 +483,28 @@ disease to disease comorbidity association:
   label_in_input: disease_is_comorbid_with_disease
 
 
+gene to disease association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: gene_is_related_to_disease
+  preferred_id: id
+  source: gene
+  target: disease
+  label_in_input: gene_is_related_to_disease
+  properties:
+    source: str[]
+    variant_source: str[]
+    opentargets_score: float
+    disgenet_gene_disease_score: float
+    disgenet_variant_disease_score: float
+    diseases_confidence_score: float
+    allele_id: str
+    clinical_significance: str
+    review_status: int
+    variation_id: str
+    pubmed_ids: str[]
+    dbsnp_id: str[]
+
 
 # protein to protein domain association:
   # represented_as: edge
