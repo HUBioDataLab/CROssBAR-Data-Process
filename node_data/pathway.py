@@ -40,7 +40,7 @@ class Pathway:
         else:
             self.kegg_organism = self.ensure_iterable(kegg_organism)
         
-        self.set_edge_types(edge_types=edge_types)
+        self.set_edge_types(edge_types=self.ensure_iterable(edge_types))
     
     def download_pathway_data(
         self,
@@ -362,7 +362,7 @@ class Pathway:
         
         ctd_df = self.process_ctd_disease_pathway()
         
-        print("Started merging disease-pathway data")
+        print("Started merging disease-pathway edge data")
         t0 = time()
         
         merged_df = pd.merge(kegg_df, ctd_df, how="outer", on=["disease_id", "pathway_id"])
@@ -388,11 +388,11 @@ class Pathway:
         
         for p in tqdm(self.reactome_pathways):
             pathway_id = self.add_prefix_to_id(prefix="reactome", identifier=p.pathway_id)                
-            node_list.append((pathway_id, label, {"name":p.pathway_name, "organism":p.organism}))
+            node_list.append((pathway_id, label, {"name":p.pathway_name.replace("'","^"), "organism":p.organism}))
             
         for p in tqdm(self.kegg_pathways):
             pathway_id = self.add_prefix_to_id(prefix="kegg.pathway", identifier=p[0])
-            node_list.append((pathway_id, label, {"name":p[1].split("-")[0].strip(), "organism":self.kegg_pathway_abbv_organism_name_dict.get(p[0][:3]) }))            
+            node_list.append((pathway_id, label, {"name":p[1].split("-")[0].strip().replace("'","^"), "organism":self.kegg_pathway_abbv_organism_name_dict.get(p[0][:3]) }))            
             
         return node_list
     
