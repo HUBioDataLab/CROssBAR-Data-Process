@@ -130,16 +130,14 @@ disease:
     icd9: str
     meddra: str
 
-# pathway:
-  # represented_as: node
-  # preferred_id: [reactome, kegg]
-  # label_in_input: [Pathway_Reactome, Pathway_KEGG]
+pathway:
+  represented_as: node
+  preferred_id: id
+  label_in_input: pathway
+  properties:
+    name: str
+    organism: str
   
-# molecular mixture: # there is no compound in Biolink. could be molecular mixture
-  # represented_as: node
-  # preferred_id: chembl.compound
-  # label_in_input: Compound
-
 # Cell: # relevant?
   # represented_as: node
   # preferred_id: CL
@@ -149,11 +147,6 @@ disease:
   # represented_as: node
   # preferred_id: hp
   # label_in_input: Phenotype
-      
-# biological process: # other two go categories?
-  # represented_as: node
-  # preferred_id: go
-  # label_in_input: Function
 
 # cell line:
   # represented_as: node
@@ -172,21 +165,11 @@ disease:
   # preferred_id: id
   # label_in_input: Patient
   
-# protein domain:
-  # represented_as: node
-  # preferred_id: interpro
-  # label_in_input: Domain
-
 # side effect:
   # is_a: phenotypic feature
   # represented_as: node
   # preferred_id: sider.effect
   # label_in_input: Side_Effect
-
-# location:
-  # represented_as: node
-  # preferred_id: go
-  # label_in_input: Location
 
 # ---
 # Associations
@@ -504,6 +487,61 @@ gene to disease association:
     variation_id: str
     pubmed_ids: str[]
     dbsnp_id: str[]
+
+
+protein to pathway association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: protein_take_part_in_pathway
+  preferred_id: id
+  source: protein
+  target: pathway
+  label_in_input: protein_take_part_in_pathway
+  properties:
+    source: str
+
+disease to pathway association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: disease_modulates_pathway
+  preferred_id: id
+  source: disease
+  target: pathway
+  label_in_input: disease_modulates_pathway
+  properties:
+    source: str[]
+
+drug to pathway association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: drug_has_target_in_pathway
+  preferred_id: id
+  source: drug
+  target: pathway
+  label_in_input: drug_has_target_in_pathway
+  properties:
+    source: str
+
+
+pathway to pathway association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: [pathway_is_part_of_pathway, pathway_is_equivalent_to_pathway]
+  preferred_id: id
+  source: pathway
+  target: pathway
+  label_in_input: [pathway_is_part_of_pathway, pathway_is_equivalent_to_pathway]
+
+reactome hierarchical association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: pathway_participates_pathway
+  preferred_id: id
+  source: pathway
+  target: pathway
+  label_in_input: pathway_participates_pathway
+
+  
 
 
 # protein to protein domain association:
