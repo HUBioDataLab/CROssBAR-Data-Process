@@ -109,12 +109,12 @@ class HPO:
             hpo_id = self.add_prefix_to_id(prefix="hp", identifier=term)
             
             props = {}
-            props["name"] = name
+            props["name"] = name.replace("|",",").replace("'","^")
             if self.hpo_ontology["synonyms"].get(term):
                 if len(self.hpo_ontology["synonyms"].get(term)) == 1:
-                    props["synonyms"] = list(self.hpo_ontology["synonyms"].get(term))[0]
+                    props["synonyms"] = list(self.hpo_ontology["synonyms"].get(term))[0].replace("|",",").replace("'","^")
                 else:                    
-                    props["synonyms"] = list(self.hpo_ontology["synonyms"].get(term))
+                    props["synonyms"] = [t.replace("|",",").replace("'","^") for t in self.hpo_ontology["synonyms"].get(term)]
                     
             node_list.append((hpo_id, label, props))
             
