@@ -137,16 +137,19 @@ pathway:
   properties:
     name: str
     organism: str
+
+phenotype:
+  represented_as: node
+  preferred_id: hp
+  label_in_input: phenotype
+  properties:
+    name: str
+    synonyms: str[]
   
 # Cell: # relevant?
   # represented_as: node
   # preferred_id: CL
   # label_in_input: Cell
-
-# phenotype:
-  # represented_as: node
-  # preferred_id: hp
-  # label_in_input: Phenotype
 
 # cell line:
   # represented_as: node
@@ -541,8 +544,35 @@ reactome hierarchical association:
   target: pathway
   label_in_input: pathway_participates_pathway
 
-  
+protein to phenotype association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: protein_is_associated_with_phenotype
+  preferred_id: id
+  source: protein
+  target: phenotype
+  label_in_input: protein_is_associated_with_phenotype
 
+phenotype hierarchical association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: phenotype_is_a_phenotype
+  preferred_id: id
+  source: phenotype
+  target: phenotype
+  label_in_input: phenotype_is_a_phenotype
+
+protein to disease association:
+  #is_a: association
+  represented_as: edge
+  label_as_edge: phenotype_is_associated_with_disease
+  preferred_id: id
+  source: protein
+  target: disease
+  label_in_input: phenotype_is_associated_with_disease
+  properties:
+    pubmed_ids: str[]
+    evidence: str
 
 # protein to protein domain association:
   # represented_as: edge
