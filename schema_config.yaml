@@ -562,12 +562,12 @@ phenotype hierarchical association:
   target: phenotype
   label_in_input: phenotype_is_a_phenotype
 
-protein to disease association:
+phenotype to disease association:
   #is_a: association
   represented_as: edge
   label_as_edge: phenotype_is_associated_with_disease
   preferred_id: id
-  source: protein
+  source: phenotype
   target: disease
   label_in_input: phenotype_is_associated_with_disease
   properties:
