@@ -117,7 +117,9 @@ class SideEffect:
             if self.drugbank_name_to_drugbank_id_dict.get(self.cid_to_sider_drug_name.get(interaction.cid)) and self.umls_to_meddra_id.get(interaction.umls_concept_id_on_MedDRA):
                 drugbank_id = self.drugbank_name_to_drugbank_id_dict.get(self.cid_to_sider_drug_name.get(interaction.cid))
                 meddra_id = self.umls_to_meddra_id[interaction.umls_concept_id_on_MedDRA]["meddra_id"]
+                
                 df_list.append((drugbank_id, meddra_id, interaction.frequency))
+                
                 
         df = pd.DataFrame(df_list, columns=["drugbank_id", "meddra_id", "frequency"])
         
@@ -139,7 +141,7 @@ class SideEffect:
         
         df_list = []
         for interaction in self.offsides_data:
-            if self.rxcui_to_drugbank.get(interaction.drug_rxnorn_id):
+            if self.rxcui_to_drugbank.get(interaction.drug_rxnorn_id) and interaction.condition_meddra_id.isnumeric():
                 df_list.append((self.rxcui_to_drugbank[interaction.drug_rxnorn_id], interaction.condition_meddra_id,
                                round(float(interaction.PRR), 3),))
                 
@@ -217,8 +219,8 @@ class SideEffect:
             self.adrecs_terminology = adrecs.adrecs_terminology()
             
             
-        for entry in  self.offsides_data:
-            if entry.condition_meddra_id not in self.meddra_id_to_side_effect_name.keys():
+        for entry in self.offsides_data:
+            if entry.condition_meddra_id not in self.meddra_id_to_side_effect_name.keys() and entry.condition_meddra_id.isnumeric():
                 self.meddra_id_to_side_effect_name[entry.condition_meddra_id] = entry.condition_concept_name
           
         adr_synonyms_dict = {}
@@ -227,13 +229,13 @@ class SideEffect:
                 self.meddra_id_to_side_effect_name[str(entry.meddra_code)] = entry.adr_term
                 
             if entry.adr_synonyms:
-                adr_synonyms_dict[str(entry.meddra_code)] = list(entry.adr_synonyms)
+                adr_synonyms_dict[str(entry.meddra_code)] = list(entry.adr_synonyms)[0].replace("|", ",").replace("'","^") if len(entry.adr_synonyms) == 1 else [t.replace("|", ",").replace("'","^") for t in entry.adr_synonyms]
                 
         print("Started writing side effect edges")
         
         node_list = []
         for meddra_term, condition_name in tqdm(self.meddra_id_to_side_effect_name.items()):
-            props = {"name":condition_name}
+            props = {"name":condition_name.replace("|", ",").replace('"',"").replace("'","^")}
             
             if adr_synonyms_dict.get(meddra_term):
                 props["synonyms"] = adr_synonyms_dict[meddra_term]
