@@ -1,21 +1,73 @@
-
 from __future__ import annotations
 
 from pypath.share import curl, settings, common
-from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos, ctdbase, unichem, chembl, uniprot, ddinter
+from pypath.inputs import drugbank, drugcentral, stitch, string, uniprot, dgidb, pharos, ctdbase, unichem, chembl, ddinter
 import kegg_local
 from contextlib import ExitStack
-from typing import Literal
+from typing import Literal, Union
 from bioregistry import normalize_curie
 from tqdm import tqdm
 from time import time
 import collections
 
 import pandas as pd
-#import modin.pandas as pd
 import numpy as np
 
 from biocypher._logger import logger
+
+from enum import Enum, auto
+
+logger.debug(f"Loading module {__name__}.")
+
+class DrugNodeField(Enum):
+    INCHI = "InChI"
+    INCHIKEY = "InChIKey"
+    CAS = "cas_number"
+    NAME = "name"
+    GROUPS = "groups"
+    GENERAL_REFERENCES = "general_references"
+    ATC_CODES = "atc_codes"
+    ZINC = "zinc"
+    CHEMBL = "chembl"
+    BINDINGDB = "bindingdb"
+    CLINICALTRIALS = "clinicaltrials"
+    CHEBI = "chebi"
+    PUBCHEM = "pubchem"
+    KEGG_DRUG = "KEGG Drug"
+    RXCUI = "RxCUI"
+    PHARMGKB = "PharmGKB"
+    PDB = "PDB"
+    DRUGCENTRAL = "Drugcentral"
+
+class DrugDTIEdgeField(Enum):
+    MECHANISM_OF_ACTION_TYPE = "mechanism_of_action_type"
+    MECHANISM_OF_ACTION = "mechanism_of_action"
+    REFERENCES = "references"
+    KNOWN_ACTION = "known_action"
+    DGIDB_SCORE = "dgidb_score"
+    ACTIVITY_VALUE = "activity_value"
+    ACTIVITY_TYPE = "activity_type"
+    PCHEMBL = "pchembl"
+    CONFIDENCE_SCORE = "confidence_score"
+    DISEASE_EFFICACY = "disease_efficacy"
+    DIRECT_INTERACTION = "direct_interaction"
+    STITCH_COMBINED_SCORE = "stitch_combined_score"
+
+class DrugDDIEdgeField(Enum):
+    RECOMMENDATION = "recommendation"
+    INTERACTION_LEVEL = "interaction_level"
+    INTERACTION_TYPE = "interaction_type"
+
+
+class DrugDGIEdgeField(Enum):
+    ACTIVITY_TYPE = "activity_type"
+    REFERENCES = "references"
+
+
+class DrugEdgeType(Enum):
+    DRUG_DRUG_INTERACTION = auto()
+    DRUG_TARGET_INTERACTION = auto()
+    DRUG_GENE_INTERACTION = auto()
 
 
 class Drug:
@@ -29,24 +81,45 @@ class Drug:
     for import into a BioCypher database.
     """
 
-    def __init__(self, drugbank_user, drugbank_passwd):
+    def __init__(self, drugbank_user, drugbank_passwd, node_fields: Union[list[DrugNodeField], None] = None,
+                 dti_edge_fields: Union[list[DrugDTIEdgeField], None] = None, ddi_edge_fields: Union[list[DrugDDIEdgeField], None] = None,
+                 dgi_edge_fields: Union[list[DrugDGIEdgeField], None] = None, 
+                 edge_types: Union[list[DrugEdgeType], None] = None,
+                 add_prefix = True, test_mode = False):
         """
         Args
             drugbank_user: drugbank username
             drugbank_passwd: drugbank password
+            node_fields: drug node fields that will be included in graph, if defined it must be values of elements from DrugNodeField enum class
+            dti_edge_fields: Drug-Target edge fields that will be included in graph, if defined it must be values of elements from DrugDTIEdgeField enum class
+            ddi_edge_fields: Drug-Drug edge fields that will be included in graph, if defined it must be values of elements from DrugDDIEdgeField enum class
+            dgi_edge_fields: Drug-Gene edge fields that will be included in graph, if defined it must be values of elements from DrugDGIEdgeField enum class
+            edge_types: list of edge types that will be included in graph, if defined it must be elements (not values of elements) from DrugEdgeType enum class
+            add_prefix: if True, add prefix to database identifiers
         """
 
-        self.edge_list = []
         self.user = drugbank_user
         self.passwd = drugbank_passwd
+        self.add_prefix = add_prefix
         
         self.swissprots = list(uniprot._all_uniprots(organism = '*', swissprot=True))
 
+        # set node fields
+        self.set_node_fields(node_fields)
 
+        # set edge fields
+        self.set_edge_fields(dti_edge_fields, ddi_edge_fields, dgi_edge_fields)
+
+        # set edge types
+        self.set_edge_types(edge_types)
+
+        # set early_stopping, if test_mode true
+        self.early_stopping = None
+        if test_mode:
+            self.early_stopping = 100
 
     def download_drug_data(
-        self, cache=False, debug=False, retries=6, download_all=False, download_only_dti=False, download_only_ddi=False, download_only_dgi=False,
-        ):
+        self, cache=False, debug=False, retries=6,):
 
         """
         Wrapper function to download drug data from various databases using pypath.
@@ -69,113 +142,69 @@ class Drug:
                 stack.enter_context(curl.cache_off())
             
             t0 = time()
-            
-            if download_all:
-                self.download_drugbank_node_data(self.user, self.passwd)
+
+            self.download_drugbank_node_data(self.user, self.passwd)
+
+            if DrugEdgeType.DRUG_TARGET_INTERACTION in self.edge_types:
                 self.download_chembl_dti_data()
                 self.download_drugbank_dti_data()
                 self.download_pharos_dti_data()
                 self.download_dgidb_dti_data()
                 self.download_kegg_dti_data()
                 self.download_stitch_dti_data()
+
+            if DrugEdgeType.DRUG_DRUG_INTERACTION in self.edge_types:
                 self.download_kegg_ddi_data()
                 self.download_ddinter_ddi_data()
+
+            if DrugEdgeType.DRUG_GENE_INTERACTION in self.edge_types:
                 self.download_ctd_data()
-            else:
-                self.download_drugbank_node_data(self.user, self.passwd)
-                
-                # DTI
-                if download_only_dti:
-                    self.download_chembl_dti_data()
-                    self.download_drugbank_dti_data()
-                    self.download_pharos_dti_data()
-                    self.download_dgidb_dti_data()
-                    self.download_kegg_dti_data()
-                    self.download_stitch_dti_data()
-                    return True
-
-                # DDI
-                if download_only_ddi:                
-                    self.download_kegg_ddi_data()
-                    self.download_ddinter_ddi_data()
-                    return True
-
-                # DGI
-                if download_only_dgi:                
-                    self.download_ctd_data()
-                    return True
             
             t1 = time()
             logger.info(f'All data is downloaded in {round((t1-t0) / 60, 2)} mins'.upper())
             
     
-    def process_drug_data(self, process_all = False, process_only_dti=False, process_only_ddi=False, process_only_dgi=False,):
+    def process_drug_data(self):
+        """
+        An encompassing function that includes all data processing functions
+        """
         
         t0 = time()        
         
-        if process_all:
-            self.process_drugbank_node_data()
+        self.process_drugbank_node_data()
+
+        if DrugEdgeType.DRUG_TARGET_INTERACTION in self.edge_types:
             self.process_drugbank_dti_data()
             self.process_chembl_dti_data()
             self.process_pharos_dti_data()
             self.process_dgidb_dti_data()
             self.process_stitch_dti_data()
             self.process_kegg_dti_data()
+        
+        if DrugEdgeType.DRUG_DRUG_INTERACTION in self.edge_types:
             self.process_kegg_ddi_data()
             self.process_ddinter_ddi_data()
+
+        if DrugEdgeType.DRUG_GENE_INTERACTION in self.edge_types:
             self.process_ctd_data()
-            
-        else:
-            self.process_drugbank_node_data()
-
-            # DTI
-            if process_only_dti:
-                self.process_drugbank_dti_data()
-                self.process_chembl_dti_data()
-                self.process_pharos_dti_data()
-                self.process_dgidb_dti_data()
-                self.process_stitch_dti_data()
-                self.process_kegg_dti_data()
-                return True
-
-            # DDI
-            if process_only_ddi:            
-                self.process_kegg_ddi_data()
-                self.process_ddinter_ddi_data()
-                return True
-
-            # DGI
-            if process_only_dgi:
-                self.process_ctd_data()
-                return True
         
         t1 = time()
         logger.info(f'All data is processed in {round((t1-t0) / 60, 2)} mins'.upper())
         
 
-    def download_drugbank_node_data(self, user, passwd, drugbank_node_fields=['InChI', 'InChIKey', 'cas_number', 'name', 'groups', 
-                                                                    'general_references', 'atc_codes', 'zinc', 'chembl', 
-                                                                    'bindingdb', 'clinicaltrials', 'chebi', 'pubchem',
-                                                                   'KEGG Drug', 'RxCUI', 'PharmGKB', 'PDB', 'Drugcentral']):
+    def download_drugbank_node_data(self, user, passwd):
 
-        """
-        Wrapper function to download DrugBank drug entries, DTI and DDI data using pypath
-        Args
-            user: drugbank username
-            passwd: drugbank password
-        """
-        
+        # define  fields belong to drugbank or unichem
         fields_list = ['cas_number', 'name', 'groups', 'general_references', 'atc_codes',]
         unichem_external_fields_list = ['zinc', 'chembl', 'bindingdb', 'clinicaltrials', 'chebi', 'pubchem']
         drugbank_external_fields_list = ['KEGG Drug', 'RxCUI', 'PharmGKB', 'PDB', 'Drugcentral']
         
-        # 
-        unichem_external_fields = []
-        drugbank_external_fields = []
+        self.unichem_external_fields = []
+        self.drugbank_external_fields = []
         fields = []
         self.add_inchi = False
         self.add_inchikey = False
-        for f in drugbank_node_fields:
+        for f in self.node_fields:
             if f == 'InChI':
                 self.add_inchi = True
             elif f == 'InChIKey':
@@ -183,17 +212,16 @@ class Drug:
             elif f in fields_list:
                 fields.append(f)
             elif f in unichem_external_fields_list:
-                unichem_external_fields.append(f)
+                self.unichem_external_fields.append(f)
             elif f in drugbank_external_fields_list:
-                drugbank_external_fields.append(f)
+                self.drugbank_external_fields.append(f)
             else:
                 raise ValueError(f" {f} is an inappropriate field name. Please provide a sutiable field name")            
         
-        self.unichem_external_fields = unichem_external_fields
-        self.drugbank_external_fields = drugbank_external_fields
         
         logger.debug('Downloading Drugbank drug node data')
         t0 = time()
+
         # Drugbank Object
         self.drugbank_data = drugbank.DrugbankFull(user = user, passwd = passwd)
 
@@ -208,18 +236,20 @@ class Drug:
         self.drugbank_drugs_detailed = self.drugbank_data.drugbank_drugs_full(fields = fields)
         
         # combine all external id mappings to self.drug_mappings_dict
-        self.get_external_database_mappings(unichem_external_fields=unichem_external_fields, 
-                                           drugbank_external_fields=drugbank_external_fields)
+        self.get_external_database_mappings()
         
         t1 = time()
         logger.info(f'Drugbank drug node data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_drugbank_node_data(self):
+
+        if not hasattr(self, "drugbank_drugs_detailed"):
+            self.download_drugbank_node_data(user=self.user, passwd=self.passwd)
         
         logger.debug('Processing Drugbank drug node data')
         t0 = time()
         
-        self.drugbank_drugs = {}
+        drugbank_drugs = {}
         all_fields = list(self.drugbank_drugs_detailed[0]._fields) + self.drugbank_external_fields + self.unichem_external_fields
         
         for drug in self.drugbank_drugs_detailed:
@@ -231,19 +261,20 @@ class Drug:
                     drug._asdict()
                     )
 
-            self.drugbank_drugs[drugbank_id] = {f: temp_dict.get(f, None) for f in all_fields}
+            drugbank_drugs[drugbank_id] = {f: temp_dict.get(f, None) for f in all_fields}
             
             if self.add_inchi:
-                self.drugbank_drugs[drugbank_id]["InChI"] = self.drugbank_properties.get(drugbank_id, {}).get("InChI", None)
+                drugbank_drugs[drugbank_id]["InChI"] = self.drugbank_properties.get(drugbank_id, {}).get("InChI", None)
                 
             if self.add_inchikey:
-                self.drugbank_drugs[drugbank_id]["InChIKey"] = self.drugbank_properties.get(drugbank_id, {}).get("InChIKey", None)
+                drugbank_drugs[drugbank_id]["InChIKey"] = self.drugbank_properties.get(drugbank_id, {}).get("InChIKey", None)
 
-            del self.drugbank_drugs[drugbank_id]['drugbank_id']
-            
+            del drugbank_drugs[drugbank_id]['drugbank_id']            
         
         t1 = time()
         logger.info(f'Drugbank drug node data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return drugbank_drugs
 
     def download_drugbank_dti_data(self):
         
@@ -254,15 +285,13 @@ class Drug:
         t1 = time()
         logger.info(f'Drugbank DTI data is downloaded in {round((t1-t0) / 60, 2)} mins')
 
-    def get_external_database_mappings(self, 
-                                       unichem_external_fields: list | None = None, 
-                                       drugbank_external_fields: list | None = None,):
+    def get_external_database_mappings(self):
         
-        if not unichem_external_fields:
-            unichem_external_fields = ['zinc', 'chembl', 'bindingdb', 'clinicaltrials', 'chebi', 'pubchem']
+        if not hasattr(self, "unichem_external_fields"):
+            self.unichem_external_fields = ['zinc', 'chembl', 'bindingdb', 'clinicaltrials', 'chebi', 'pubchem']
         
-        if not drugbank_external_fields:
-            drugbank_external_fields = ['KEGG Drug', 'RxCUI', 'PharmGKB', 'PDB', 'Drugcentral']
+        if not hasattr(self, "drugbank_external_fields"):
+            self.drugbank_external_fields = ['KEGG Drug', 'RxCUI', 'PharmGKB', 'PDB', 'Drugcentral']
         
         
         # create dictionaries for every unichem external fields
@@ -281,7 +310,7 @@ class Drug:
         
         # arrange unichem dict for selected unichem fields
         for field in self.unichem_external_fields_dict.keys():
-            if field not in unichem_external_fields:
+            if field not in self.unichem_external_fields:
                 del self.unichem_external_fields_dict[field]
                 
                 
@@ -319,7 +348,7 @@ class Drug:
         # create final external id mapping dict
         self.drug_mappings_dict = collections.defaultdict(dict)
         for k in self.drugbank_drugs_external_ids.keys():
-            drugbank_mappings = {field:self.drugbank_drugs_external_ids[k].get(field, None) for field in drugbank_external_fields}
+            drugbank_mappings = {field:self.drugbank_drugs_external_ids[k].get(field, None) for field in self.drugbank_external_fields}
             unichem_mappings = unichem_drugs_id_mappings[k]
             self.drug_mappings_dict[k] = (drugbank_mappings | unichem_mappings)
         
@@ -401,62 +430,19 @@ class Drug:
         drugbank_dti_df["source"] = "DrugBank"
         
         # Aggregate references field and remove duplicates
-        self.drugbank_dti_duplicate_removed_df = drugbank_dti_df.groupby(["drugbank_id", "uniprot_id"], sort=False, as_index=False).aggregate({"drugbank_id":"first",
+        drugbank_dti_df = drugbank_dti_df.groupby(["drugbank_id", "uniprot_id"], sort=False, as_index=False).aggregate({"drugbank_id":"first",
                                                                                               "uniprot_id":"first",
                                                                                               "mechanism_of_action_type":"first",
                                                                                               "references":self.aggregate_column_level,
                                                                                               "known_action":"first",
                                                                                               "source":"first"}).replace("", np.nan)
 
-        self.drugbank_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        drugbank_dti_df.fillna(value=np.nan, inplace=True)
 
         t1 = time()
         logger.info(f'Drugbank DTI data is processed in {round((t1-t0) / 60, 2)} mins')
-        
-    def aggregate_column_level(self, element, joiner="|"):
-        import numpy as np
 
-        _set = set()
-        for e in set(element.dropna().values):
-            if joiner in e:
-                for i in e.split(joiner):
-                    _set.add(i)
-            else:
-                _set.add(e)
-
-        if _set:
-            return joiner.join(_set)
-        else:
-            return np.nan
-        
-        
-    def get_median(self, element):
-        return round(float(element.dropna().median()), 3)
-
-
-    def get_middle_row(self, element):
-        if len(list(element.index)) == 1:
-            return element.values[0]
-        elif len(list(element.dropna().index)) == 0:
-            return np.nan
-        elif len(list(element.dropna().index)) % 2 == 1:
-            middle = len(list(element.dropna().index)) // 2
-            return element.dropna().values[middle]
-        else:
-            middle = round((len(list(element.dropna().index))/2 + 0.00001))
-            return element.dropna().values[middle]
-        
-    def merge_source_column(self, element, joiner="|"):
-        _list = []
-        for e in list(element.dropna().values):
-            if joiner in e:
-                for i in e.split(joiner):
-                    _list.append(i)
-            else:
-                _list.append(e)
-
-        return joiner.join(list(dict.fromkeys(_list).keys()))
-
+        return drugbank_dti_df
 
     def download_dgidb_dti_data(self):
 
@@ -473,7 +459,7 @@ class Drug:
         self.dgidb_dti = dgidb.dgidb_interactions()
         
         # map entrez gene ids to swissprot ids
-        uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "*", True)
+        uniprot_to_entrez = uniprot.uniprot_data("xref_geneid", "*", True)
         self.entrez_to_uniprot = collections.defaultdict(list)
         for k,v in uniprot_to_entrez.items():
             for entrez_id in list(filter(None, v.split(";"))):
@@ -513,10 +499,10 @@ class Drug:
         dgidb_dti_df.sort_values(by="dgidb_score", ignore_index=True, inplace=True, ascending=False)
         
         # remove pairs without drugbank ids
-        dgidb_dti_duplicate_removed_df = dgidb_dti_df.dropna(subset="drugbank_id", axis=0).reset_index(drop=True)
+        dgidb_dti_df = dgidb_dti_df.dropna(subset="drugbank_id", axis=0).reset_index(drop=True)
         
         # remove duplicates
-        self.dgidb_dti_duplicate_removed_df = dgidb_dti_duplicate_removed_df.groupby(["drugbank_id", "uniprot_id"], 
+        dgidb_dti_df = dgidb_dti_df.groupby(["drugbank_id", "uniprot_id"], 
                                                                         sort=False, as_index=False).aggregate({
                                                                                                     "uniprot_id":"first",
                                                                                                     "drugbank_id":"first",
@@ -525,10 +511,12 @@ class Drug:
                                                                                                     "references":self.aggregate_column_level,
                                                                                                     "source":"first"}).replace("", np.nan)
 
-        self.dgidb_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        dgidb_dti_df.fillna(value=np.nan, inplace=True)
 
         t1 = time()
         logger.info(f'Dgidb DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return dgidb_dti_df
         
     def download_kegg_dti_data(
         self,
@@ -581,12 +569,14 @@ class Drug:
         logger.debug(f'Processing KEGG DTI data')
         t0 = time()
 
-        self.kegg_dti_df = pd.DataFrame(self.kegg_dti, columns=["drugbank_id", "uniprot_id"])
+        kegg_dti_df = pd.DataFrame(self.kegg_dti, columns=["drugbank_id", "uniprot_id"])
 
-        self.kegg_dti_df["source"] = "Kegg"
+        kegg_dti_df["source"] = "Kegg"
         
         t1 = time()
         logger.info(f'KEGG DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return kegg_dti_df
         
     def download_kegg_ddi_data(self, from_csv=True):
         # DDI
@@ -607,11 +597,12 @@ class Drug:
         if from_csv:
             # even with cache it takes a lot of time to download kegg ddi data. To interfere that, processed
             # version of it saved in a csv file
-            self.kegg_ddi_duplicate_removed_df = pd.read_csv('kegg_ddi_duplicate_removed_df.csv')
-            self.kegg_ddi_duplicate_removed_df.rename(columns={'interaction_type':'recommendation'}, inplace=True)
-        else:
-            
+            kegg_ddi_df = pd.read_csv('kegg_ddi_duplicate_removed_df.csv')
+            kegg_ddi_df.rename(columns={'interaction_type':'recommendation'}, inplace=True)
+                    
+        else:            
             kegg_ddi = set()
+
             for k, v in self.kegg_ddi_data.items():
                 if self.kegg_to_drugbank.get(k, None) and not isinstance(v, str):
                     drug1_drugbank_id = self.kegg_to_drugbank[k]
@@ -645,10 +636,12 @@ class Drug:
 
             kegg_ddi_df["source"] = "Kegg"
 
-            self.kegg_ddi_duplicate_removed_df = kegg_ddi_df[~kegg_ddi_df[["drug1", "drug2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+            kegg_ddi_df = kegg_ddi_df[~kegg_ddi_df[["drug1", "drug2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
 
         t1 = time()
         logger.info(f'KEGG DDI data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return kegg_ddi_df
             
             
     def download_ddinter_ddi_data(self):
@@ -696,10 +689,12 @@ class Drug:
 
         ddinter_df["source"] = "DDInter"
         
-        self.ddinter_duplicate_removed_df = ddinter_df[~ddinter_df[["drug1", "drug2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        ddinter_df = ddinter_df[~ddinter_df[["drug1", "drug2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         t1 = time()
         logger.info(f'DDInter DDI data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return ddinter_df
         
     def download_pharos_dti_data(self):
 
@@ -761,7 +756,7 @@ class Drug:
         # - get middle row for activity_type and mechanism_of_action_type
         # - get median of activity_value
         # - aggregate all the references
-        self.pharos_dti_duplicate_removed_df = pharos_dti_df.groupby(["uniprot_id", "drugbank_id"], sort=False, as_index=False).aggregate({"uniprot_id":"first",
+        pharos_dti_df = pharos_dti_df.groupby(["uniprot_id", "drugbank_id"], sort=False, as_index=False).aggregate({"uniprot_id":"first",
                                                                                               "activity_type":self.get_middle_row,
                                                                                               "mechanism_of_action_type":self.get_middle_row,
                                                                                               "pchembl":self.get_median,
@@ -769,10 +764,12 @@ class Drug:
                                                                                         "drugbank_id":"first",
                                                                                         "source":"first"}).replace("", np.nan)
 
-        self.pharos_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        pharos_dti_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()
         logger.info(f'Pharos DTI data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return pharos_dti_df
         
     def download_chembl_dti_data(self):
         
@@ -831,7 +828,7 @@ class Drug:
         
         chembl_dti_df = chembl_cti_df.dropna(subset=["drugbank_id"], axis=0).reset_index(drop=True)
 
-        self.chembl_dti_duplicate_removed_df = chembl_dti_df.groupby(["uniprot_id", "drugbank_id"], sort=False, as_index=False).aggregate({
+        chembl_dti_df = chembl_dti_df.groupby(["uniprot_id", "drugbank_id"], sort=False, as_index=False).aggregate({
                                                                                                    "pchembl":self.get_median,
                                                                                                    "activity_value":self.get_median,
                                                                                                    "activity_type":self.get_middle_row,
@@ -845,11 +842,12 @@ class Drug:
                                                                                                    "mechanism_of_action":self.get_middle_row,
                                                                                                    "source":"first"}).replace("", np.nan)
 
-        self.chembl_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        chembl_dti_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()
         logger.info(f'Chembl DTI data is processed in {round((t1-t0) / 60, 2)} mins')
-        
+
+        return chembl_dti_df        
         
     def download_ctd_data(self):
         
@@ -908,18 +906,19 @@ class Drug:
                 return list(set(element.dropna().values))[0]
             
             
-        self.ctd_cgi_duplicate_removed_df = ctd_cgi_df.groupby(["drugbank_id", "entrez_id"], sort=False, as_index=False).aggregate({"entrez_id":"first",
+        ctd_cgi_df = ctd_cgi_df.groupby(["drugbank_id", "entrez_id"], sort=False, as_index=False).aggregate({"entrez_id":"first",
                                                                                         "drugbank_id":"first",
                                                                                         "action_type":detect_conflicting_action_type,
                                                                                         "references":"first"}).replace("", np.nan)
         
-        self.ctd_cgi_duplicate_removed_df.dropna(subset="action_type", inplace=True)
+        ctd_cgi_df.dropna(subset="action_type", inplace=True)
         
-        self.ctd_cgi_duplicate_removed_df["source"] = "CTD"
+        ctd_cgi_df["source"] = "CTD"
         
         t1 = time()
         logger.info(f'CTD DGI data is processed in {round((t1-t0) / 60, 2)} mins')
-        
+
+        return ctd_cgi_df        
 
     def download_stitch_dti_data(
             self, 
@@ -953,7 +952,7 @@ class Drug:
         t0 = time()
 
         # map string ids to swissprot ids
-        uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
+        uniprot_to_string = uniprot.uniprot_data("xref_string", "*", True)
         self.string_to_uniprot = collections.defaultdict(list)
         for k,v in uniprot_to_string.items():
             for string_id in list(filter(None, v.split(";"))):
@@ -1024,24 +1023,34 @@ class Drug:
         stitch_dti_df.sort_values(by="stitch_combined_score", ignore_index=True, inplace=True, ascending=False)
         
         # remove duplicates
-        self.stitch_dti_duplicate_removed_df = stitch_dti_df.groupby(["drugbank_id", "uniprot_id"], sort=False, as_index=False).aggregate({
+        stitch_dti_df = stitch_dti_df.groupby(["drugbank_id", "uniprot_id"], sort=False, as_index=False).aggregate({
                                                                                            "drugbank_id":"first",
                                                                                            "uniprot_id":"first",
                                                                                            "stitch_combined_score":self.get_median, 
                                                                                            "source":"first"}).replace("", np.nan)
 
-        self.stitch_dti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        stitch_dti_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()        
         logger.info(f'STITCH data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return stitch_dti_df
         
     def merge_all_dtis(self):
+
+        drugbank_dti_df = self.process_drugbank_dti_data()
+        chembl_dti_df = self.process_chembl_dti_data()
+        pharos_dti_df = self.process_pharos_dti_data()
+        dgidb_dti_df = self.process_dgidb_dti_data()
+        stitch_dti_df = self.process_stitch_dti_data()
+        kegg_dti_df = self.process_kegg_dti_data()
+        
         
         logger.debug("Started merging Drugbank and Chembl DTI data")
         t0 = time()
 
         # merge drugbank and chembl dti
-        drugbank_plus_chembl_dti_df = self.drugbank_dti_duplicate_removed_df.merge(self.chembl_dti_duplicate_removed_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        drugbank_plus_chembl_dti_df = drugbank_dti_df.merge(chembl_dti_df, how="outer", on=["uniprot_id", "drugbank_id"])
         
         # merge references
         drugbank_plus_chembl_dti_df["references"] = drugbank_plus_chembl_dti_df[["references_x", "references_y"]].apply(
@@ -1066,7 +1075,7 @@ class Drug:
         t0 = time()
         
         # merge drugbank+chembl and pharos dti
-        drugbank_plus_chembl_plus_pharos_dti_df = drugbank_plus_chembl_dti_df.merge(self.pharos_dti_duplicate_removed_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        drugbank_plus_chembl_plus_pharos_dti_df = drugbank_plus_chembl_dti_df.merge(pharos_dti_df, how="outer", on=["uniprot_id", "drugbank_id"])
         
         # merge references
         drugbank_plus_chembl_plus_pharos_dti_df["references"] = drugbank_plus_chembl_plus_pharos_dti_df[["references_x", "references_y"]].apply(
@@ -1100,7 +1109,7 @@ class Drug:
         t0 = time()
         
         # merge drugbank+chembl+pharos and dgidb
-        drugbank_plus_chembl_plus_pharos_plus_dgidb_dti_df = drugbank_plus_chembl_plus_pharos_dti_df.merge(self.dgidb_dti_duplicate_removed_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        drugbank_plus_chembl_plus_pharos_plus_dgidb_dti_df = drugbank_plus_chembl_plus_pharos_dti_df.merge(dgidb_dti_df, how="outer", on=["uniprot_id", "drugbank_id"])
         
         # merge references
         drugbank_plus_chembl_plus_pharos_plus_dgidb_dti_df["references"] = drugbank_plus_chembl_plus_pharos_plus_dgidb_dti_df[["references_x", "references_y"]].apply(self.aggregate_column_level, axis=1)
@@ -1124,7 +1133,7 @@ class Drug:
         t0 = time()
         
         # merge drugbank+chembl+pharos+dgidb and stitch
-        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_dti_df.merge(self.stitch_dti_duplicate_removed_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_dti_df.merge(stitch_dti_df, how="outer", on=["uniprot_id", "drugbank_id"])
         
         # merge sources
         drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df["source"] = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df[["source_x", "source_y"]].apply(
@@ -1139,7 +1148,7 @@ class Drug:
         logger.debug("Started merging Drugbank+Chembl+Pharos+Dgidb+Stitch and Kegg DTI data")
         t0 = time()
         
-        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df.merge(self.kegg_dti_df, how="outer", on=["uniprot_id", "drugbank_id"])
+        drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_dti_df.merge(kegg_dti_df, how="outer", on=["uniprot_id", "drugbank_id"])
         
         # merge sources
         drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df["source"] = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df[["source_x", "source_y"]].apply(
@@ -1151,17 +1160,20 @@ class Drug:
         t1 = time()        
         logger.info(f'Drugbank+Chembl+Pharos+Dgidb+Stitch and Kegg DTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
-        # create self object from final dataframe
-        self.all_dti_df = drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df
+        # return final dataframe
+        return drugbank_plus_chembl_plus_pharos_plus_dgidb_plus_stitch_plus_kegg_dti_df
         
         
     def merge_all_ddis(self):
+
+        kegg_ddi_df = self.process_kegg_ddi_data()
+        ddinter_ddi_df = self.process_ddinter_ddi_data()
         
         logger.debug("Started merging Kegg and DDInter DDI data")
         t0 = time()
 
         # merge kegg and ddinter ddi data
-        kegg_plus_ddinter_ddi_df = self.kegg_ddi_duplicate_removed_df.merge(self.ddinter_duplicate_removed_df, how="outer", on=["drug1", "drug2"])
+        kegg_plus_ddinter_ddi_df = kegg_ddi_df.merge(ddinter_ddi_df, how="outer", on=["drug1", "drug2"])
         
         # merge source columns
         kegg_plus_ddinter_ddi_df["source"] = kegg_plus_ddinter_ddi_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
@@ -1172,113 +1184,211 @@ class Drug:
         t1 = time()        
         logger.info(f'Kegg and DDInter DDI data is merged in {round((t1-t0) / 60, 2)} mins')
         
-        self.all_ddi_df = kegg_plus_ddinter_ddi_df
+        # return final dataframe
+        return kegg_plus_ddinter_ddi_df
         
-    def get_drug_nodes(self, early_stopping=None):
+    def get_drug_nodes(self, label="drug"):
         """
         Merges drug node information from different sources. 
         """
+        drugbank_drugs = self.process_drugbank_node_data()
 
-        self.node_list = []
+        node_list = []
 
         logger.debug('Started writing drug nodes')
         
         counter = 0
-        for k, v in tqdm(self.drugbank_drugs.items()):
-            drug_id = normalize_curie('drugbank:' + k)
+        for k, v in tqdm(drugbank_drugs.items()):
+            drug_id = self.add_prefix_to_id(prefix="drugbank", identifier=k)
             
             props = {}
             for prop_key, prop_value in v.items():
-                if prop_value:
+                if prop_value and prop_key in self.node_fields:
                     if isinstance(prop_value, str):                        
                         props[prop_key.replace(" ", "_").lower()] = prop_value.replace("'", "^")
                     else:                        
                         props[prop_key.replace(" ", "_").lower()] = prop_value
                     
 
-            self.node_list.append((drug_id, 'drug', props))
+            node_list.append((drug_id, label, props))
             
             counter += 1
-            if early_stopping and counter == early_stopping:
+            if self.early_stopping and counter == self.early_stopping:
                 break
 
-    def get_dti_edges(self, early_stopping=500):
+        return node_list
 
-        self.dti_edge_list = []
+    def get_dti_edges(self, label = "drug_targets_protein"):
+
+        dti_df = self.merge_all_dtis()
         
         logger.debug('Started writing DTI edges')
-        for index, row in tqdm(self.all_dti_df.iterrows(), total=self.all_dti_df.shape[0]):
+
+        edge_list = []
+        for index, row in tqdm(dti_df.iterrows(), total=dti_df.shape[0]):
             
             _dict = row.to_dict()
-            source = normalize_curie('drugbank:' + _dict["drugbank_id"])
-            target = normalize_curie('uniprot:' +_dict["uniprot_id"])
+            source = self.add_prefix_to_id(prefix="drugbank", identifier=_dict["drugbank_id"])
+            target = self.add_prefix_to_id(prefix="uniprot", identifier=_dict["uniprot_id"])
 
             del _dict["drugbank_id"], _dict["uniprot_id"]
 
             props = dict()
             for k, v in _dict.items():
-                if str(v) != "nan":
+                if k in self.dti_edge_fields and str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
                         props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
                     else:
                         props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
-            self.dti_edge_list.append((None, source, target, "drug_targets_protein", props))
+            edge_list.append((None, source, target, label, props))
             
-            if early_stopping and (index+1) == early_stopping:
+            if self.early_stopping and (index+1) == self.early_stopping:
                 break
 
-    def get_dgi_edges(self, early_stopping=500):
-        
-        self.dgi_edge_list = []
-        
+        return edge_list
+
+    def get_dgi_edges(self):
+
+        dgi_df = self.process_ctd_data()
+                
         logger.debug('Started writing DGI edges')
-        for index, row in tqdm(self.ctd_cgi_duplicate_removed_df.iterrows(), total=self.ctd_cgi_duplicate_removed_df.shape[0]):
+
+        edge_list = []
+
+        for index, row in tqdm(dgi_df.iterrows(), total=dgi_df.shape[0]):
             _dict = row.to_dict()
-            source = normalize_curie('drugbank:' + _dict["drugbank_id"])
-            target = normalize_curie('ncbigene:' + _dict["entrez_id"])
+
+            source = self.add_prefix_to_id(prefix="drugbank", identifier=_dict["drugbank_id"])
+            target = self.add_prefix_to_id(prefix="ncbigene", identifier=_dict["entrez_id"])
             label = "_".join(["drug", _dict["action_type"], "gene"])
 
             del _dict["drugbank_id"], _dict["entrez_id"], _dict["action_type"]
             
             props = dict()
             for k, v in _dict.items():
-                if str(v) != "nan":
+                if k in self.dgi_edge_fields and str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
                         props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
                     else:
                         props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
-            self.dgi_edge_list.append((None, source, target, label, props))
+            edge_list.append((None, source, target, label, props))
             
-            if early_stopping and (index+1) == early_stopping:
+            if self.early_stopping and (index+1) == self.early_stopping:
                 break
+        
+        return edge_list
 
-    def get_ddi_edges(self, early_stopping=500):
-        self.ddi_edge_list = []
+    def get_ddi_edges(self, label = "drug_interacts_with_drug"):
+
+        ddi_df = self.merge_all_ddis()
         
         logger.debug('Started writing DGI edges')
+
+        edge_list = []
         
-        for index, row in tqdm(self.all_ddi_df.iterrows(), total=self.all_ddi_df.shape[0]):
+        for index, row in tqdm(ddi_df.iterrows(), total=ddi_df.shape[0]):
             _dict = row.to_dict()
             
-            source = normalize_curie('drugbank:' + _dict["drug1"])
-            target = normalize_curie('drugbank:' + _dict["drug2"])
+            source = self.add_prefix_to_id(prefix="drugbank", identifier=_dict["drug1"])
+            target = self.add_prefix_to_id(prefix="drugbank", identifier=_dict["drug2"])
             
             del _dict["drug1"], _dict["drug2"]
             
             props = dict()
             for k, v in _dict.items():
-                if str(v) != "nan":
+                if k in self.ddi_edge_fields and str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
                         props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
                     else:
                         props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
-            self.ddi_edge_list.append((None, source, target, "drug_interacts_with_drug", props))
+            ddi_df.append((None, source, target, label, props))
             
-            if early_stopping and (index+1) == early_stopping:
+            if self.early_stopping and (index+1) == self.early_stopping:
                 break
+        
+        return ddi_df
+    
+    def set_node_fields(node_fields):
+        if node_fields:
+            self.node_fields = node_fields
+        else:
+            self.node_fields = [field.value for field in DrugNodeField]
+
+    def set_edge_fields(dti_edge_fields, ddi_edge_fields, dgi_edge_fields):
+        if dti_edge_fields:
+            self.dti_edge_fields = dti_edge_fields
+        else:
+            self.dti_edge_fields = [field.value for field in DrugDTIEdgeField]
+
+        if ddi_edge_fields:
+            self.ddi_edge_fields = ddi_edge_fields
+        else:
+            self.ddi_edge_fields = [field.value for field in DrugDDIEdgeField]
+
+        if dgi_edge_fields:
+            self.dgi_edge_fields = dgi_edge_fields
+        else:
+            self.dgi_edge_fields = [field.value for field in DrugDGIEdgeField]
+
+    def set_edge_types(edge_types):
+        if edge_types:
+            self.edge_types = edge_types
+        else:
+            self.edge_types = [edge_type for edge_type in DrugEdgeType]
+
+    def add_prefix_to_id(self, prefix, identifier : str = None, sep=":") -> str:
+        """
+        Adds prefix to ids
+        """
+        if self.add_prefix and identifier:
+            return normalize_curie(prefix + sep + str(identifier))
+        
+        return identifier
+
+    def aggregate_column_level(self, element, joiner="|"):
+        _set = set()
+        for e in set(element.dropna().values):
+            if joiner in e:
+                for i in e.split(joiner):
+                    _set.add(i)
+            else:
+                _set.add(e)
+
+        if _set:
+            return joiner.join(_set)
+        else:
+            return np.nan
+        
+        
+    def get_median(self, element):
+        return round(float(element.dropna().median()), 3)
+
+
+    def get_middle_row(self, element):
+        if len(list(element.index)) == 1:
+            return element.values[0]
+        elif len(list(element.dropna().index)) == 0:
+            return np.nan
+        elif len(list(element.dropna().index)) % 2 == 1:
+            middle = len(list(element.dropna().index)) // 2
+            return element.dropna().values[middle]
+        else:
+            middle = round((len(list(element.dropna().index))/2 + 0.00001))
+            return element.dropna().values[middle]
+        
+    def merge_source_column(self, element, joiner="|"):
+        _list = []
+        for e in list(element.dropna().values):
+            if joiner in e:
+                for i in e.split(joiner):
+                    _list.append(i)
+            else:
+                _list.append(e)
+
+        return joiner.join(list(dict.fromkeys(_list).keys()))
