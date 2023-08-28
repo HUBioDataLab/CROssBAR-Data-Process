@@ -16,6 +16,7 @@ from pypath.inputs import (
     humsavar,
 )
 import kegg_local
+import json
 
 from pypath.inputs import ontology
 from pypath.formats import obo
@@ -25,14 +26,17 @@ from typing import Union
 from contextlib import ExitStack
 
 from bioregistry import normalize_curie
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 from time import time
 import collections
+from biocypher._logger import logger
 
 from enum import Enum, auto
 
 import numpy as np
 import pandas as pd
+
+logger.debug(f"Loading module {__name__}.")
 
 class DiseaseNodeField(Enum):
     NAME = "name"
@@ -57,9 +61,6 @@ class DiseaseNodeField(Enum):
                cls.ORPHANET.value, cls.HP.value, cls.ICD10CM.value, cls.NCIT.value, cls.ICD9.value,
                cls.MEDDRA.value]
 
-class DiseaseNodeType(Enum):
-    pass
-
 class DiseaseEdgeType(Enum):
     MONDO_HIERARCHICAL_RELATIONS = auto()
     ORGANISM_TO_DISEASE = auto()
@@ -70,8 +71,26 @@ class DiseaseEdgeType(Enum):
     
 
 class GENE_TO_DISEASE_INTERACTION_FIELD(Enum):
-    PUBMED_ID = ""
-    
+    OPENTARGETS_SCORE = "opentargets_score"
+    DISEASES_CONFIDENCE_SCORE = "diseases_confidence_score"
+    ALLELE_ID = "allele_id"
+    CLINICAL_SIGNIFICANCE = "clinical_significance"
+    REVIEW_STATUS = "review_status"
+    DBSNP_ID = "dbsnp_id"
+    VARIATION_ID = "variation_id"
+    PUBMED_IDS = "pubmed_ids"
+    DISGENET_GENE_DISEASE_SCORE = "disgenet_gene_disease_score"
+    DISGENET_VARIANT_DISEASE_SCORE = "disgenet_variant_disease_score"
+
+class DISEASE_TO_DRUG_INTERACTION_FIELD(Enum):
+    MAX_PHASE = "max_phase"
+    PUBMED_IDS = "pubmed_ids"
+
+class DISEASE_TO_DISEASE_INTERACTION_FIELD(Enum):
+    DISGENET_JACCARD_GENES_SCORE = "disgenet_jaccard_genes_score"
+    DISGENET_JACCARD_VARIANTS_SCORE = "disgenet_jaccard_variants_score"
+
+
 
 class Disease:
     """
@@ -79,18 +98,45 @@ class Disease:
     for import into a BioCypher database.
     """
     
-    def __init__(self, drugbank_user, drugbank_passwd, node_types: Union[list[DiseaseNodeType], None] = None, 
-                 disease_node_fields: Union[list[DiseaseNodeField], None] = None,
+    def __init__(self, drugbank_user, drugbank_passwd, 
+                disease_node_fields: Union[list[DiseaseNodeField], None] = None,
                 edge_types: Union[list[DiseaseEdgeType], None] = None,
-                 add_prefix = True,):
+                gene_disease_edge_fields: Union[list[GENE_TO_DISEASE_INTERACTION_FIELD], None] = None,
+                disease_drug_edge_fields: Union[list[DISEASE_TO_DRUG_INTERACTION_FIELD], None] = None,
+                disease_disease_edge_fields: Union[list[DISEASE_TO_DISEASE_INTERACTION_FIELD], None] = None,
+                add_prefix = True,
+                test_mode = False):
         
+        """
+        Args:
+            drugbank_user: drugbank username
+            drugbank_passwd: drugbank password
+            disease_node_fields: disease node fields that will be included in graph, if defined it must be values of elements from DiseaseNodeField enum class
+            gene_disease_edge_fields: Gene-Disease edge fields that will be included in graph, if defined it must be values of elements from GENE_TO_DISEASE_INTERACTION_FIELD enum class
+            disease_drug_edge_fields: Disease-Drug edge fields that will be included in graph, if defined it must be values of elements from DISEASE_TO_DRUG_INTERACTION_FIELD enum class
+            disease_disease_edge_fields: Disease-Disease edge fields that will be included in graph, if defined it must be values of elements from DISEASE_TO_DISEASE_INTERACTION_FIELD enum class
+            edge_types: list of edge types that will be included in graph, if defined it must be elements (not values of elements) from DiseaseEdgeType enum class
+            add_prefix: if True, add prefix to database identifiers
+            test_mode: if True, limits amount of output data
+        """
         self.drugbank_user = drugbank_user
         self.drugbank_passwd = drugbank_passwd
         self.add_prefix = add_prefix
         
+        # set edge types
+        self.set_edge_types(edge_types=self.ensure_iterable(edge_types))
+
+        # set node and edge field
+        self.set_node_and_edge_fields(disease_node_fields=disease_node_fields,
+                                      gene_disease_edge_fields=gene_disease_edge_fields,
+                                      disease_drug_edge_fields=disease_drug_edge_fields,
+                                      disease_disease_edge_fields=disease_disease_edge_fields)
         
-        self.set_node_and_edge_types(edge_types=self.ensure_iterable(edge_types))
-        self.set_node_and_edge_fields(disease_node_fields=disease_node_fields)
+        # set early_stopping, if test_mode true
+        self.early_stopping = None
+        if test_mode:
+            self.early_stopping = 100
+         
     
     def download_disease_data(
         self,
@@ -116,14 +162,23 @@ class Disease:
             if not cache:
                 stack.enter_context(curl.cache_off())
                 
-            
-            self.download_mondo_data()
-            
-            self.prepare_mappings()
-            
-            self.download_pathophenodb_data()
-            
+            t0 = time()
+
+            self.download_mondo_data()            
+            self.prepare_mappings()            
+            self.download_pathophenodb_data()            
             self.download_ctd_data()
+            self.download_chembl_data()
+            self.download_diseases_data()
+            self.download_clinvar_data()
+            self.download_disgenet_data()
+            self.download_opentargets_data()
+            self.download_malacards_data()
+            self.download_kegg_data()
+            self.download_humsavar_data()
+
+            t1 = time()
+            logger.info(f'All data is downloaded in {round((t1-t0) / 60, 2)} mins'.upper())
             
             
     def download_mondo_data(self):
@@ -139,7 +194,7 @@ class Disease:
         self.mondo = ontology.ontology(ontology="mondo", fields=fields)
         
         t1 = time()
-        print(f"Mondo data is downloaded in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"Mondo data is downloaded in {round((t1-t0) / 60, 2)} mins")
         
         if DiseaseEdgeType.MONDO_HIERARCHICAL_RELATIONS in self.edge_types:
             t0 = time()
@@ -151,7 +206,7 @@ class Disease:
             self.mondo_hierarchical_relations = {k:v for k,v in mondo_obo_reader.parents.items() if v}
             
             t1 = time()
-            print(f"Mondo hierarchical relations data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Mondo hierarchical relations data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
             
     def download_pathophenodb_data(self):
@@ -161,7 +216,7 @@ class Disease:
             self.pathopheno_organism_disease_int = pathophenodb.disease_pathogen_interactions()
 
             t1 = time()
-            print(f"PathophenoDB organism-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"PathophenoDB organism-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
     def download_ctd_data(self):
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
@@ -170,7 +225,7 @@ class Disease:
             self.ctdbase_gda = ctdbase.ctdbase_relations(relation_type='gene_disease')
             
             t1 = time()
-            print(f"CTD gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"CTD gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
             
         if DiseaseEdgeType.DISEASE_TO_DRUG in self.edge_types:
@@ -183,7 +238,7 @@ class Disease:
             self.cas_to_drugbank = {drug.cas_number:drug.drugbank_id for drug in drugbank_drugs_detailed if drug.cas_number}
             
             t1 = time()
-            print(f"CTD chemical-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"CTD chemical-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
     def download_chembl_data(self):
         if DiseaseEdgeType.DISEASE_TO_DRUG in self.edge_types:
@@ -194,7 +249,7 @@ class Disease:
             self.chembl_to_drugbank = {k:list(v)[0] for k,v in unichem.unichem_mapping("chembl", "drugbank").items()}
             
             t1 = time()
-            print(f"CHEMBL drug indication data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"CHEMBL drug indication data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
             
     def download_kegg_data(self):
@@ -217,7 +272,7 @@ class Disease:
                 self.kegg_diseases_mappings[dis] = result[0].db_links
                 
             t1 = time()
-            print(f"KEGG drug indication data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"KEGG drug indication data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
@@ -235,7 +290,7 @@ class Disease:
                     self.kegg_diseases_mappings[dis] = result[0].db_links
             
             t1 = time()
-            print(f"KEGG gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"KEGG gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
     def download_opentargets_data(self):
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
@@ -252,7 +307,7 @@ class Disease:
                 self.ensembl_gene_to_uniprot = {self.ensembl_transcript_to_ensembl_gene(ensts):uniprot_id for uniprot_id, ensts in uniprot_to_ensembl.items() if self.ensembl_transcript_to_ensembl_gene(ensts)}
             
             t1 = time()
-            print(f"Open Targets direct gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Open Targets direct gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
     def download_diseases_data(self):
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
@@ -275,7 +330,7 @@ class Disease:
                     self.ensembl_protein_to_uniprot[p] = v
             
             t1 = time()
-            print(f"DISEASES gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"DISEASES gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
     def download_clinvar_data(self):
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
@@ -287,7 +342,7 @@ class Disease:
             self.clinvar_citation = clinvar.clinvar_citations()
             
             t1 = time()
-            print(f"Clinvar variant-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Clinvar variant-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
     def download_humsavar_data(self):
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
@@ -300,7 +355,7 @@ class Disease:
                 self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot_to_entrez.items()}
             
             t1 = time()
-            print(f"Humsavar variant-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Humsavar variant-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
     def download_disgenet_data(self, from_csv = True):
         if from_csv:
@@ -316,7 +371,7 @@ class Disease:
                 for symbol in v.split(" "):
                     self.gene_symbol_to_uniprot[symbol] = k
             
-            print("Skipping downloading part of Disgenet. Will directly process from csv file")
+            logger.info("Skipping downloading part of Disgenet. Will directly process from csv file")
             
         if DiseaseEdgeType.DISEASE_TO_DISEASE in self.edge_types and not from_csv:
             t0 = time()
@@ -342,10 +397,10 @@ class Disease:
                         self.disgenet_api.get_ddas_that_share_variants(disease_id)
                     )
                 except TypeError:
-                    print(f'{disease_id} not available')
+                    logger.debug(f'{disease_id} not available')
                     
             t1 = time()
-            print(f"Disgenet disease-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Disgenet disease-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types and not from_csv:
             t0 = time()
@@ -381,7 +436,7 @@ class Disease:
                     )
 
                 except TypeError:
-                    print(f'{disease_id} not available')
+                    logger.debug(f'{disease_id} not available')
                     
     def download_malacards_data(self):
         
@@ -403,7 +458,7 @@ class Disease:
             self.disease_comorbidity = json.loads(file_content)
             
             t1 = time()
-            print(f"Malacards disease comorbidity data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Malacards disease comorbidity data is downloaded in {round((t1-t0) / 60, 2)} mins")
     
     def prepare_mappings(self):
         self.mondo_mappings = collections.defaultdict(dict)
@@ -472,7 +527,7 @@ class Disease:
         if not hasattr(self, "ctdbase_cd"):
             self.download_ctd_data()
         
-        print("Processing CTD chemical-disease data")
+        logger.debug("Started processing CTD chemical-disease data")
         t0 = time()
         
         df_list = []
@@ -483,7 +538,8 @@ class Disease:
                 disease_id = interaction.DiseaseID.split(":")[1]
                 if self.mondo_mappings[db].get(disease_id, None):
                     disease_id = self.mondo_mappings[db].get(disease_id)
-                    drug_id = self.cas_to_drugbank.get(interaction.CasRN)                    
+                    drug_id = self.cas_to_drugbank.get(interaction.CasRN)
+
                     if isinstance(interaction.PubMedIDs, list):
                         pubmed_ids = "|".join(interaction.PubMedIDs)
                     else:
@@ -499,7 +555,7 @@ class Disease:
                                                                                           "pubmed_ids":self.merge_source_column,
                                                                                           "source":"first"})        
         t1 = time()
-        print(f"CTD chemical-disease interaction data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"CTD chemical-disease interaction data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
@@ -510,7 +566,7 @@ class Disease:
         if not hasattr(self, "chembl_disease_drug"):
             self.download_chembl_data()
         
-        print("Processing CHEMBL drug indication data")
+        logger.debug("Started processing CHEMBL drug indication data")
         t0 = time()
         
         df_list = []
@@ -536,7 +592,7 @@ class Disease:
         df.drop_duplicates(subset=["disease_id", "drug_id"], ignore_index=True, inplace=True)
         
         t1 = time()
-        print(f"CHEMBL drug indication data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"CHEMBL drug indication data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
@@ -546,7 +602,7 @@ class Disease:
         if not hasattr(self, "kegg_drug_disease"):
             self.download_kegg_data()
         
-        print("Processing CHEMBL drug indication data")
+        logger.debug("Started processing CHEMBL drug indication data")
         t0 = time()
         
         kegg_dbs_to_mondo_dbs = {"MeSH":"MESH", "OMIM":"OMIM", "ICD-10":"ICD10CM",}
@@ -583,6 +639,9 @@ class Disease:
         # Doesnt look necessary
         df.drop_duplicates(subset=["disease_id", "drug_id"], ignore_index=True, inplace=True)
         
+        t1 = time()
+        logger.info(f"KEGG drug indication data is processed in {round((t1-t0) / 60, 2)} mins")
+
         return df
     
     def process_opentargets_gene_disease(self):
@@ -591,6 +650,9 @@ class Disease:
         if not hasattr(self, "opentargets_direct"):
             self.download_opentargets_data()
         
+        logger.debug("Started processing OpenTargets gene-disease interaction data")
+        t0 = time()
+
         df_list = []
         for disease, targets in self.opentargets_direct.items():
             db = disease.split("_")[0]
@@ -611,6 +673,9 @@ class Disease:
         
         df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
         
+        t1 = time()
+        logger.info(f"OpenTargets gene-disease interaction data is processed in {round((t1-t0) / 60, 2)} mins")
+
         return df
         
     def process_diseases_gene_disease(self):
@@ -620,7 +685,7 @@ class Disease:
         if not hasattr(self, "diseases_knowledge") or not hasattr(self, "diseases_experimental"):
             self.download_diseases_data()
         
-        print("Processing DISEASES gene-disease data")
+        logger.debug("Started processing DISEASES gene-disease data")
         t0 = time()
         
         df_list = []
@@ -654,7 +719,7 @@ class Disease:
         diseases_experimental_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
         
         t1 = time()
-        print(f"DISEASES gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"DISEASES gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
 
         return diseases_knowledge_df, diseases_experimental_df
     
@@ -664,7 +729,7 @@ class Disease:
         if not hasattr(self, "clinvar_variant_disease"):
             self.download_clinvar_data()
             
-        print("Processing Clinvar variant-disease data")
+        logger.debug("Started processing Clinvar variant-disease data")
         t0 = time()
         
         selected_clinical_significances = ["Pathogenic", "Likely pathogenic", "Pathogenic/Likely pathogenic"]
@@ -729,7 +794,7 @@ class Disease:
         df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
         
         t1 = time()
-        print(f"Clinvar variant-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"Clinvar variant-disease data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
@@ -739,7 +804,7 @@ class Disease:
         if not hasattr(self, "humsavar_data"):
             self.download_humsavar_data()
             
-        print("Processing Humsavar variant-disease data")
+        logger.debug("Started processing Humsavar variant-disease data")
         t0 = time()
 
         df_list = []
@@ -757,7 +822,7 @@ class Disease:
         df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
                 
         t1 = time()
-        print(f"Humsavar variant-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"Humsavar variant-disease data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
@@ -767,7 +832,7 @@ class Disease:
         if not hasattr(self, "kegg_gene_disease"):
             self.download_kegg_data()
             
-        print("Processing KEGG gene-disease data")
+        logger.debug("Started processing KEGG gene-disease data")
         t0 = time()
         
         kegg_dbs_to_mondo_dbs = {"MeSH":"MESH", "OMIM":"OMIM", "ICD-10":"ICD10CM",}
@@ -803,7 +868,7 @@ class Disease:
         df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
         
         t1 = time()
-        print(f"KEGG gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"KEGG gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
@@ -817,10 +882,10 @@ class Disease:
             self.download_disgenet_data()
         
         if from_csv:
-            print("Processing Disgenet gene-disease data from csv")
+            logger.debug("Started processing Disgenet gene-disease data from csv")
             t0 = time()
             
-            # 
+            # read disgenet gene-disease interaction csv file
             disgenet_gda_df = pd.read_csv("disgenet_dga.csv")
             
             disgenet_gda_df = disgenet_gda_df[["geneid", "diseaseid", "score"]]
@@ -837,7 +902,7 @@ class Disease:
             disgenet_gda_df.sort_values(by="disgenet_gene_disease_score", ascending=False, ignore_index=True, inplace=True)
             disgenet_gda_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
             
-            # 
+            # read disgenet variant-disease interaction csv file
             disgenet_vda_df = pd.read_csv("disgenet_vda.csv")
             
             disgenet_vda_df = disgenet_vda_df[["gene_symbol", "diseaseid", "variantid", "score"]]
@@ -867,11 +932,11 @@ class Disease:
             disgenet_vda_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
             
             t1 = time()
-            print(f"Disgenet gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Disgenet gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
             
             return disgenet_gda_df, disgenet_vda_df
         else:
-            print("Processing Disgenet gene-disease data")
+            logger.debug("Started processing Disgenet gene-disease data")
             t0 = time()
             
             df_list = []
@@ -905,7 +970,7 @@ class Disease:
             disgenet_vda_df.drop_duplicates(subset=["gene_id", "disease_id"], ignore_index=True, inplace=True)
                 
             t1 = time()
-            print(f"Disgenet gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Disgenet gene-disease data is processed in {round((t1-t0) / 60, 2)} mins")
             
             return disgenet_gda_df, disgenet_vda_df
             
@@ -919,7 +984,7 @@ class Disease:
             self.download_disgenet_data()
             
         if from_csv:
-            print("Processing Disgenet disease-disease data from csv")
+            logger.debug("Started processing Disgenet disease-disease data from csv")
             t0 = time()
             
             def rounder(value):
@@ -972,11 +1037,11 @@ class Disease:
             disgenet_dda_variant_df = disgenet_dda_variant_df[~disgenet_dda_variant_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
             
             t1 = time()
-            print(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
             
             return disgenet_dda_gene_df, disgenet_dda_variant_df
         else:
-            print("Processing Disgenet disease-disease data")
+            logger.debug("Started processing Disgenet disease-disease data")
             t0 = time()
             
             df_list = []
@@ -1012,7 +1077,7 @@ class Disease:
             disgenet_dda_variant_df = disgenet_dda_variant_df[~disgenet_dda_variant_df[["disease_id1", "disease_id2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
             
             t1 = time()
-            print(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"Disgenet disease-disease data is processed in {round((t1-t0) / 60, 2)} mins")
             
             return disgenet_dda_gene_df, disgenet_dda_variant_df
         
@@ -1020,7 +1085,7 @@ class Disease:
         if not hasattr(self, "disease_comorbidity"):
             self.download_malacards_data()
             
-        print("Processing Malacards disease comorbidity data")
+        logger.info("Started processing Malacards disease comorbidity data")
         t0 = time()
             
         df_list = []
@@ -1039,7 +1104,7 @@ class Disease:
         comorbidity_df = comorbidity_df[~comorbidity_df[["disease1", "disease2"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         t1 = time()
-        print(f"Malacards disease comorbidity data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"Malacards disease comorbidity data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return comorbidity_df
             
@@ -1051,7 +1116,7 @@ class Disease:
         
         kegg_df = self.process_kegg_drug_indication()
         
-        print("Started merging disease-drug data")
+        logger.debug("Started merging disease-drug data")
         t0 = time()
         
         # MERGE CHEMBL AND CTD
@@ -1061,6 +1126,8 @@ class Disease:
         
         merged_df.drop(columns=["source_x", "source_y"], inplace=True)
         
+        logger.debug("CHEMBL and CTD disease-drug data is merged")
+
         # MERGE CHEMBL+CTD AND KEGG
         merged_df = merged_df.merge(kegg_df, how="outer", on=["disease_id", "drug_id"])
         
@@ -1069,7 +1136,7 @@ class Disease:
         merged_df.drop(columns=["source_x", "source_y"], inplace=True)
         
         t1 = time()
-        print(f"Disease-drug edge data is merged in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"Disease-drug edge data is merged in {round((t1-t0) / 60, 2)} mins")
         
         return merged_df
     
@@ -1087,7 +1154,7 @@ class Disease:
         
         clinvar_df = self.process_clinvar_gene_disease()
         
-        print("Started merging gene-disease data")
+        logger.debug("Started merging gene-disease data")
         t0 = time()
         
         # MERGE DISEASES KNOWLEDGE AND EXPERIMENTAL DATA
@@ -1096,6 +1163,8 @@ class Disease:
         diseases_df["source"] = diseases_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
         
         diseases_df.drop(columns=["source_x", "source_y"], inplace=True)
+
+        logger.debug("DISEASES Knowledge and Experimental gene-disease data is merged")
         
         # MERGE DISGENET GENE-DISEASE AND VARIANT-DISEASE ASSOCIATION DATA
         disgenet_df = pd.merge(disgenet_gda_df, disgenet_vda_df, how="outer", on=["gene_id", "disease_id"])
@@ -1104,6 +1173,8 @@ class Disease:
         
         disgenet_df.drop(columns=["source_x", "source_y"], inplace=True)        
         
+        logger.debug("Disgenet gene-disease and Disgenet variant-disease data is merged")
+
         # MERGE OPENTARGETS AND DISEASES DATA
         merged_df = opentargets_df.merge(diseases_df, how="outer", on=["gene_id", "disease_id"])
         
@@ -1111,6 +1182,8 @@ class Disease:
         
         merged_df.drop(columns=["source_x", "source_y"], inplace=True)
         
+        logger.debug("Opentargets and DISEASES gene-disease data is merged")
+
         # MERGE OPENTARGETS+DISEASES AND KEGG DATA      
         merged_df = merged_df.merge(kegg_df, how="outer", on=["gene_id", "disease_id"])
         
@@ -1118,6 +1191,8 @@ class Disease:
         
         merged_df.drop(columns=["source_x", "source_y"], inplace=True)
         
+        logger.debug("Opentargets+DISEASES and KEGG gene-disease data is merged")
+
         # MERGE OPENTARGETS+DISEASES+KEGG AND CLINVAR DATA
         merged_df = merged_df.merge(clinvar_df, how="outer", on=["gene_id", "disease_id"])
         
@@ -1125,6 +1200,8 @@ class Disease:
         
         merged_df.drop(columns=["source_x", "source_y"], inplace=True)
         
+        logger.debug("Opentargets+DISEASES+KEGG and Clinvar gene-disease data is merged")
+
         # MERGE OPENTARGETS+DISEASES+KEGG+CLINVAR AND HUMSAVAR DATA
         merged_df = merged_df.merge(humsavar_df, how="outer", on=["gene_id", "disease_id"])
         
@@ -1143,6 +1220,8 @@ class Disease:
         merged_df.drop(columns=["dbsnp_id_x", "dbsnp_id_y"], inplace=True)
         
         merged_df.replace("", np.nan, inplace=True)
+
+        logger.debug("Opentargets+DISEASES+KEGG+Clinvar and Humsavar gene-disease data is merged")
         
         # MERGE OPENTARGETS+DISEASES+KEGG+CLINVAR+HUMSAVAR AND DISGENET DATA
         merged_df = merged_df.merge(disgenet_df, how="outer", on=["gene_id", "disease_id"])
@@ -1165,14 +1244,14 @@ class Disease:
         merged_df.replace("", np.nan, inplace=True)
         
         t1 = time()
-        print(f"Gene-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"Gene-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
         
         return merged_df
     
     def merge_disease_disease_edge_data(self):
         disgenet_dda_gene_df, disgenet_dda_variant_df = self.process_disgenet_disease_disease()
         
-        print("Started merging disease-disease data")
+        logger.debug("Started merging disease-disease data")
         t0 = time()
         
         merged_df = disgenet_dda_gene_df.merge(disgenet_dda_variant_df, how="outer", on=["disease_id1", "disease_id2"])
@@ -1184,7 +1263,7 @@ class Disease:
         merged_df = merged_df[merged_df["disease_id1"].ne(merged_df["disease_id2"])]
         
         t1 = time()
-        print(f"Disease-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"Disease-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
         
         return merged_df       
         
@@ -1192,13 +1271,13 @@ class Disease:
         if not hasattr(self, "mondo"):
             self.download_mondo_data()            
             
-        print("Preparing Disease nodes")
+        logger.debug("Started writing Disease nodes")
         
         node_list = []
         
         xref_dbs = list(set(DiseaseNodeField.get_xrefs()).intersection(self.disease_node_fields))
         
-        for term in tqdm(self.mondo):
+        for index, term in enumerate(tqdm(self.mondo)):
             if not term.is_obsolete and term.obo_id and "MONDO" in term.obo_id:
                 disease_id = self.add_prefix_to_id(prefix="MONDO", identifier=term.obo_id)
                 props = {}
@@ -1220,6 +1299,9 @@ class Disease:
                             
                             
                 node_list.append((disease_id, label, props))
+
+                if self.early_stopping and index == self.early_stopping:
+                    break
                 
         return node_list
         
@@ -1227,15 +1309,21 @@ class Disease:
         if not hasattr(self, "mondo_hierarchical_relations"):
             self.download_mondo_data()
             
-        print("Preparing Mondo hiererchical edges")
+        logger.debug("Started writing Mondo hiererchical edges")
         
         edge_list = []
-        
+
+        counter = 0
         for source, target_list in tqdm(self.mondo_hierarchical_relations.items()):
             source_id = self.add_prefix_to_id(prefix="MONDO", identifier=source)
             for target in target_list:
                 target_id = self.add_prefix_to_id(prefix="MONDO", identifier=target)
                 edge_list.append((None, source_id, target_id, label, {}))
+                
+                counter += 1
+
+            if self.early_stopping and counter >= self.early_stopping:
+                break
 
         return edge_list
         
@@ -1247,17 +1335,20 @@ class Disease:
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
             
-        print("Preparing organism-disease edges")
+        logger.debug("Started writing organism-disease edges")
             
         edge_list = []
         
-        for interaction in tqdm(self.pathopheno_organism_disease_int):
+        for index, interaction in enumerate(tqdm(self.pathopheno_organism_disease_int)):
             if interaction.evidence == "manual assertion" and self.mondo_mappings["DOID"].get(interaction.disease_id.split(":")[1], None):
 
                 disease_id = self.add_prefix_to_id(prefix="MONDO", identifier=self.mondo_mappings["DOID"].get(interaction.disease_id.split(":")[1]))
                 organism_id = self.add_prefix_to_id(prefix="ncbitaxon", identifier=interaction.pathogen_taxid)
 
                 edge_list.append((None, organism_id, disease_id, label, {}))
+
+            if self.early_stopping and index == self.early_stopping:
+                break
                     
         return edge_list
     
@@ -1265,7 +1356,7 @@ class Disease:
         
         disease_drug_edges_df = self.merge_disease_drug_edge_data()
         
-        print("Started writing disease-drug edges")
+        logger.debug("Started writing disease-drug edges")
         
         edge_list = []
         for index, row in tqdm(disease_drug_edges_df.iterrows(), total=disease_drug_edges_df.shape[0]):
@@ -1278,13 +1369,16 @@ class Disease:
             
             props = {}
             for k, v in _dict.items():
-                if str(v) != "nan":
+                if k in self.disease_drug_edge_fields and str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
                         props[k] = v.split("|")
                     else:
                         props[k] = v
                         
-            edge_list.append((None, disease_id, drug_id, label, props))            
+            edge_list.append((None, disease_id, drug_id, label, props))
+
+            if self.early_stopping and index == self.early_stopping:
+                break          
         
         return edge_list
         
@@ -1292,7 +1386,7 @@ class Disease:
         
         gene_disease_edges_df = self.merge_gene_disease_edge_data()
         
-        print("Preparing gene-disease edges")
+        logger.debug("Started writing gene-disease edges")
         
         edge_list = []
         
@@ -1306,7 +1400,7 @@ class Disease:
             
             props = {}
             for k, v in _dict.items():
-                if str(v) != "nan":
+                if k in self.gene_disease_edge_fields and str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
                         props[k] = v.split("|")
                     elif k == "review_status":
@@ -1315,13 +1409,16 @@ class Disease:
                         props[k] = v
                         
             edge_list.append((None, gene_id, disease_id, label, props))
+
+            if self.early_stopping and index == self.early_stopping:
+                break
             
         return edge_list
     
     def get_disease_disease_edges(self, label="disease_is_associated_with_disease"):
         disease_disease_edges_df = self.merge_disease_disease_edge_data()
         
-        print("Started writing disease-disease edges")
+        logger.debug("Started writing disease-disease edges")
 
         edge_list = []
         for index, row in tqdm(disease_disease_edges_df.iterrows(), total=disease_disease_edges_df.shape[0]):
@@ -1334,20 +1431,23 @@ class Disease:
             
             props = {}
             for k, v in _dict.items():
-                if str(v) != "nan":
+                if k in self.disease_disease_edge_fields and str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
                         props[k] = v.split("|")
                     else:
                         props[k] = v
                         
-            edge_list.append((None, disease_id1, disease_id2, label, props))            
+            edge_list.append((None, disease_id1, disease_id2, label, props))
+
+            if self.early_stopping and index == self.early_stopping:
+                break          
         
         return edge_list
     
     def get_disease_comorbidity_edges(self, label="disease_is_comorbid_with_disease"):
         comorbidity_edges_df = self.process_malacards_disease_comorbidity()
         
-        print("Started writing disease comorbidity edges")
+        logger.debug("Started writing disease comorbidity edges")
         
         edge_list = []
         
@@ -1357,6 +1457,9 @@ class Disease:
             disease_id2 = self.add_prefix_to_id(prefix="MONDO", identifier=row["disease2"])
             
             edge_list.append((None, disease_id1, disease_id2, label, props))
+
+            if self.early_stopping and index == self.early_stopping:
+                break
             
         return edge_list
     
@@ -1426,14 +1529,32 @@ class Disease:
     def ensembl_gene_to_ensembl_protein(self, ensg_id):
         return mapping.map_name(ensg_id, "ensg_biomart", "ensp_biomart")
     
-    def set_node_and_edge_types(self, edge_types):
+    def set_edge_types(self, edge_types):
         if edge_types:
             self.edge_types = edge_types
         else:
             self.edge_types = [field for field in DiseaseEdgeType]
         
-    def set_node_and_edge_fields(self, disease_node_fields):
+    def set_node_and_edge_fields(self, disease_node_fields, gene_disease_edge_fields,
+                                 disease_drug_edge_fields, disease_disease_edge_fields):
         if disease_node_fields:
             self.disease_node_fields = [field.value for field in disease_node_fields]
         else:
             self.disease_node_fields = [field.value for field in DiseaseNodeField]
+
+        if gene_disease_edge_fields:
+            self.gene_disease_edge_fields = [field.value for field in gene_disease_edge_fields]
+        else:
+            self.gene_disease_edge_fields = [field.value for field in GENE_TO_DISEASE_INTERACTION_FIELD]
+        
+        if disease_drug_edge_fields:
+            self.disease_drug_edge_fields = [field.value for field in disease_drug_edge_fields]
+        else:
+            self.disease_drug_edge_fields = [field.value for field in DISEASE_TO_DRUG_INTERACTION_FIELD]
+        
+        if disease_disease_edge_fields:
+            self.disease_disease_edge_fields = [field.value for field in disease_disease_edge_fields]
+        else:
+            self.disease_disease_edge_fields = [field.value for field in DISEASE_TO_DISEASE_INTERACTION_FIELD]
+
+
