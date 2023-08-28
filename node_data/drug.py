@@ -87,7 +87,7 @@ class Drug:
                  edge_types: Union[list[DrugEdgeType], None] = None,
                  add_prefix = True, test_mode = False):
         """
-        Args
+        Args:
             drugbank_user: drugbank username
             drugbank_passwd: drugbank password
             node_fields: drug node fields that will be included in graph, if defined it must be values of elements from DrugNodeField enum class
@@ -96,6 +96,7 @@ class Drug:
             dgi_edge_fields: Drug-Gene edge fields that will be included in graph, if defined it must be values of elements from DrugDGIEdgeField enum class
             edge_types: list of edge types that will be included in graph, if defined it must be elements (not values of elements) from DrugEdgeType enum class
             add_prefix: if True, add prefix to database identifiers
+            test_mode: if True, limits amount of output data
         """
 
         self.user = drugbank_user
@@ -105,7 +106,7 @@ class Drug:
         self.swissprots = list(uniprot._all_uniprots(organism = '*', swissprot=True))
 
         # set node fields
-        self.set_node_fields(node_fields)
+        self.set_node_fields(node_fields=node_fields)
 
         # set edge fields
         self.set_edge_fields(dti_edge_fields, ddi_edge_fields, dgi_edge_fields)
@@ -166,7 +167,7 @@ class Drug:
     
     def process_drug_data(self):
         """
-        An encompassing function that includes all data processing functions
+        An encompassing function that include all data processing functions
         """
         
         t0 = time()        
@@ -1262,7 +1263,12 @@ class Drug:
 
             source = self.add_prefix_to_id(prefix="drugbank", identifier=_dict["drugbank_id"])
             target = self.add_prefix_to_id(prefix="ncbigene", identifier=_dict["entrez_id"])
-            label = "_".join(["drug", _dict["action_type"], "gene"])
+
+            if _dict["action_type"] == "decreases_expression":
+                label = "_".join(["drug", "downregulates", "gene"])
+            else:
+                label = "_".join(["drug", "upregulates", "gene"])
+
 
             del _dict["drugbank_id"], _dict["entrez_id"], _dict["action_type"]
             
@@ -1307,20 +1313,20 @@ class Drug:
                         props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
 
 
-            ddi_df.append((None, source, target, label, props))
+            edge_list.append((None, source, target, label, props))
             
             if self.early_stopping and (index+1) == self.early_stopping:
                 break
         
-        return ddi_df
+        return edge_list
     
-    def set_node_fields(node_fields):
+    def set_node_fields(self, node_fields):
         if node_fields:
             self.node_fields = node_fields
         else:
             self.node_fields = [field.value for field in DrugNodeField]
 
-    def set_edge_fields(dti_edge_fields, ddi_edge_fields, dgi_edge_fields):
+    def set_edge_fields(self, dti_edge_fields, ddi_edge_fields, dgi_edge_fields):
         if dti_edge_fields:
             self.dti_edge_fields = dti_edge_fields
         else:
@@ -1336,7 +1342,7 @@ class Drug:
         else:
             self.dgi_edge_fields = [field.value for field in DrugDGIEdgeField]
 
-    def set_edge_types(edge_types):
+    def set_edge_types(self, edge_types):
         if edge_types:
             self.edge_types = edge_types
         else:
@@ -1365,10 +1371,8 @@ class Drug:
         else:
             return np.nan
         
-        
     def get_median(self, element):
         return round(float(element.dropna().median()), 3)
-
 
     def get_middle_row(self, element):
         if len(list(element.index)) == 1:
