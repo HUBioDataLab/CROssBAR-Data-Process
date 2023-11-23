@@ -357,7 +357,7 @@ class Disease:
             t1 = time()
             logger.info(f"Humsavar variant-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
-    def download_disgenet_data(self, from_csv = True):
+    def download_disgenet_data(self, from_csv = False):
         if from_csv:
             if not hasattr(self, "disgenet_id_mappings_dict"):
                 self.prepare_disgenet_id_mappings()
@@ -872,7 +872,7 @@ class Disease:
         
         return df
     
-    def process_disgenet_gene_disease(self, from_csv = True):
+    def process_disgenet_gene_disease(self, from_csv = False):
         
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
@@ -974,7 +974,7 @@ class Disease:
             
             return disgenet_gda_df, disgenet_vda_df
             
-    def process_disgenet_disease_disease(self, from_csv = True):
+    def process_disgenet_disease_disease(self, from_csv = False):
         
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
