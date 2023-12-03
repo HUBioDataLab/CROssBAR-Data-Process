@@ -759,7 +759,7 @@ class _SplitDatabase(_KeggDatabase):
 
 
     def handle(self, entry):
-        return entry.split(':')[1]
+        return entry.split(':')[1] if ":" in entry else entry
 
 
 class _Disease(_SplitDatabase):
