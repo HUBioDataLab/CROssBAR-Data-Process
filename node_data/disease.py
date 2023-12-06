@@ -5,7 +5,7 @@ from pypath.inputs import (
     pathophenodb,
     ctdbase,
     clinvar,
-    disgenet,
+    # disgenet,
     pharos,
     chembl,
     diseases,
@@ -16,13 +16,16 @@ from pypath.inputs import (
     humsavar,
 )
 import kegg_local
+import disgenet_local as disgenet
 import json
+import os
 
 from pypath.inputs import ontology
 from pypath.formats import obo
 from pypath.utils import mapping
+from pypath.share import cache
 
-from typing import Union
+
 from contextlib import ExitStack
 
 from bioregistry import normalize_curie
@@ -124,7 +127,7 @@ class Disease:
         self.add_prefix = add_prefix
         
         # set edge types
-        self.set_edge_types(edge_types=self.ensure_iterable(edge_types))
+        self.set_edge_types(edge_types=edge_types)
 
         # set node and edge field
         self.set_node_and_edge_fields(disease_node_fields=disease_node_fields,
@@ -164,9 +167,9 @@ class Disease:
                 
             t0 = time()
 
-            self.download_mondo_data()            
-            self.prepare_mappings()            
-            self.download_pathophenodb_data()            
+            self.download_mondo_data()
+            self.prepare_mappings()
+            self.download_pathophenodb_data()
             self.download_ctd_data()
             self.download_chembl_data()
             self.download_diseases_data()
@@ -268,8 +271,11 @@ class Disease:
             
             self.kegg_diseases_mappings = {}
             for dis in kegg_disease_ids:
-                result = kegg_local.get_diseases(dis)
-                self.kegg_diseases_mappings[dis] = result[0].db_links
+                try:
+                    result = kegg_local.get_diseases(dis)
+                    self.kegg_diseases_mappings[dis] = result[0].db_links
+                except (IndexError, UnicodeDecodeError) as e:
+                    logger.debug(f'{dis} not available')
                 
             t1 = time()
             logger.info(f"KEGG drug indication data is downloaded in {round((t1-t0) / 60, 2)} mins")
@@ -296,13 +302,13 @@ class Disease:
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
             
-            self.opentargets_direct = opentargets.overall_direct_score()
+            self.opentargets_direct = opentargets.opentargets_direct_score()
                            
-            uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "9606", True)
+            uniprot_to_entrez = uniprot.uniprot_data("xref_geneid", "9606", True)
             self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot_to_entrez.items()}
             
             if not hasattr(self, "ensembl_gene_to_uniprot"):
-                uniprot_to_ensembl = uniprot.uniprot_data("database(Ensembl)", "9606", True)
+                uniprot_to_ensembl = uniprot.uniprot_data("xref_ensembl", "9606", True)
 
                 self.ensembl_gene_to_uniprot = {self.ensembl_transcript_to_ensembl_gene(ensts):uniprot_id for uniprot_id, ensts in uniprot_to_ensembl.items() if self.ensembl_transcript_to_ensembl_gene(ensts)}
             
@@ -318,7 +324,7 @@ class Disease:
 
             
             if not hasattr(self, "ensembl_gene_to_uniprot"):
-                uniprot_to_ensembl = uniprot.uniprot_data("database(Ensembl)", "9606", True)
+                uniprot_to_ensembl = uniprot.uniprot_data("xref_ensembl", "9606", True)
 
                 self.ensembl_gene_to_uniprot = {self.ensembl_transcript_to_ensembl_gene(ensts):uniprot_id for uniprot_id, ensts in uniprot_to_ensembl.items() if self.ensembl_transcript_to_ensembl_gene(ensts)}
 
@@ -348,10 +354,10 @@ class Disease:
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
             
-            self.humsavar_data = humsavar.humsavar()
+            self.humsavar_data = humsavar.uniprot_variants()
             
             if not hasattr(self, "uniprot_to_entrez"):
-                uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "9606", True)
+                uniprot_to_entrez = uniprot.uniprot_data("xref_geneid", "9606", True)
                 self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot_to_entrez.items()}
             
             t1 = time()
@@ -363,11 +369,11 @@ class Disease:
                 self.prepare_disgenet_id_mappings()
                 
             if not hasattr(self, "uniprot_to_entrez"):
-                uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "9606", True)
+                uniprot_to_entrez = uniprot.uniprot_data("xref_geneid", "9606", True)
                 self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot_to_entrez.items()}
                 
             self.gene_symbol_to_uniprot = {}
-            for k, v in uniprot.uniprot_data("genes", "9606", True).items():
+            for k, v in uniprot.uniprot_data("gene_names", "9606", True).items():
                 for symbol in v.split(" "):
                     self.gene_symbol_to_uniprot[symbol] = k
             
@@ -415,11 +421,11 @@ class Disease:
                 self.prepare_disgenet_id_mappings()
                 
             if not hasattr(self, "uniprot_to_entrez"):
-                uniprot_to_entrez = uniprot.uniprot_data("database(GeneID)", "9606", True)
+                uniprot_to_entrez = uniprot.uniprot_data("xref_geneid", "9606", True)
                 self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot_to_entrez.items()}
                 
             self.gene_symbol_to_uniprot = {}
-            for k, v in uniprot.uniprot_data("genes", "9606", True).items():
+            for k, v in uniprot.uniprot_data("gene_names", "9606", True).items():
                 for symbol in v.split(" "):
                     self.gene_symbol_to_uniprot[symbol] = k
                     
@@ -435,15 +441,17 @@ class Disease:
                         self.disgenet_api.get_vdas_by_diseases(disease_id)
                     )
 
-                except TypeError:
+                except (TypeError, ValueError) as e:
                     logger.debug(f'{disease_id} not available')
+            t1 = time()
+            logger.info(f"Disgenet gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
                     
     def download_malacards_data(self):
         
         if DiseaseEdgeType.DISEASE_COMOBORDITIY in self.edge_types:
             t0 = time()
-            
-            with open("MalaCards.json", encoding="utf-8") as file:
+            malacards_json_path = os.path.join(cache.get_cachedir(), "MalaCards.json")
+            with open(malacards_json_path, encoding="utf-8") as file:
                 file_content = file.read()
             
             malacards_external_ids = json.loads(file_content)
@@ -452,7 +460,8 @@ class Disease:
             
             self.malacards_disease_slug_to_malacards_id = {entry["DiseaseSlug"]:entry["McId"] for entry in malacards_external_ids}
             
-            with open("MalaCardsRelatedDiseases.json", encoding="utf-8") as file:
+            malacards_related_diseases_json_path = os.path.join(cache.get_cachedir(), "MalaCardsRelatedDiseases.json")
+            with open(malacards_related_diseases_json_path, encoding="utf-8") as file:
                 file_content = file.read()
                 
             self.disease_comorbidity = json.loads(file_content)
