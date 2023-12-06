@@ -2,9 +2,11 @@ from __future__ import annotations
 import collections
 
 from pypath.share import curl, settings, common
-from pypath.inputs import chembl, stitch, uniprot, unichem
+from pypath.inputs import chembl, stitch, uniprot, unichem, string
 from contextlib import ExitStack
 from bioregistry import normalize_curie
+
+from typing import Literal, Union
 
 import pandas as pd
 import numpy as np
@@ -12,14 +14,53 @@ import numpy as np
 from time import time
 
 from tqdm import tqdm
+from enum import Enum
 
 from biocypher._logger import logger
+
+class CompoundNodeField(Enum):
+    TYPE = "type"
+    FULL_MWT = "full_mwt"
+    SPECIES = "species"
+    HEAVY_ATOMS = "heavy_atoms"
+    ALOGP = "alogp"
+    INCHI = "std_inchi"
+    INCHIKEY = "std_inchi_key"
+    QED_SCORE = "qed_score"
+    SMILES = "canonical_smiles"
+
+class CompoundCTIEdgeField(Enum):
+    PCHEMBL = "pchembl"
+    ACTIVITY_VALUE = "activity_value"
+    ACTIVITY_TYPE = "activity_type"
+    ASSAY_CHEMBL = "assay_chembl"
+    REFERENCES = "references"
+    CONFIDENCE_SCORE = "confidence_score"
+    STITCH_COMBINED_SCORE = "stitch_combined_score"
+
 
 class Compound:
     """
     Class that downloads compound data using pypath and reformats it to be ready
     for import into a BioCypher database.
     """
+
+    def __init__(self, node_fields:Union[list[CompoundNodeField], None] = None,
+                 cti_edge_fields:Union[list[CompoundCTIEdgeField], None] = None,
+                 add_prefix = True, test_mode = False):
+        
+        self.add_prefix = add_prefix
+
+        # set node fields
+        self.set_node_fields(node_fields=node_fields)
+
+        # set cti edge fields
+        self.set_edge_fields(cti_edge_fields=cti_edge_fields)
+
+        # set early_stopping, if test_mode true
+        self.early_stopping = None
+        if test_mode:
+            self.early_stopping = 100
 
     def download_compound_data(self, cache=False, debug=False, retries=3,):
         """
@@ -87,11 +128,64 @@ class Compound:
             
         t1 = time()
         logger.info(f'Chembl data is downloaded in {round((t1-t0) / 60, 2)} mins')
+
+    def process_chembl_cti_data(self):
+
+        if not hasattr(self, "chembl_acts"):
+            self.download_chembl_data()
+
+        logger.debug("Started Chembl processing compound-target interaction data")
+        t0 = time()
+        
+        df_list = []
+        
+        # filter activities
+        for act in self.chembl_acts:
+            if act.assay_chembl in self.assay_dict and act.chembl not in self.chembl_to_drugbank and all([True if item else False for item in [act.standard_value,
+                                                                                            act.standard_type,
+                                                                                           self.target_dict.get(act.target_chembl, None)]]):
+
+                df_list.append((act.chembl, act.pchembl, act.standard_value, act.standard_type, act.assay_chembl, 
+                                self.target_dict.get(act.target_chembl, None), str(self.document_to_pubmed.get(act.document, None)),
+                               self.assay_dict[act.assay_chembl].confidence_score,))
+
+        
+        # create dataframe
+        chembl_cti_df = pd.DataFrame(df_list, columns=["chembl", "pchembl", "activity_value", "activity_type", "assay_chembl", "uniprot_id",
+                                                      "references", "confidence_score"])
+
+        chembl_cti_df.fillna(value=np.nan, inplace=True)
+        chembl_cti_df.replace("None", np.nan, inplace=True)
+
+        # add source
+        chembl_cti_df["source"] = "ChEMBL"
+        
+        # sort by activity value
+        chembl_cti_df.sort_values(by="activity_value", ignore_index=True, inplace=True)
+        
+        # multiple processing
+        chembl_cti_df = chembl_cti_df.groupby(["uniprot_id", "chembl"], sort=False, as_index=False).aggregate({
+                                                                                           "chembl":"first",
+                                                                                           "pchembl":self.get_median,
+                                                                                           "activity_value":self.get_median,
+                                                                                           "activity_type":self.get_middle_row,
+                                                                                           "assay_chembl":self.aggregate_column_level,
+                                                                                           "uniprot_id":"first",
+                                                                                           "references":self.aggregate_column_level,
+                                                                                           "confidence_score":self.get_middle_row,
+                                                                                           "source":"first"}).replace("", np.nan)
+        
+        chembl_cti_df.fillna(value=np.nan, inplace=True)
+        
+        t1 = time()
+        logger.info(f'Chembl data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return chembl_cti_df
         
     
     def download_stitch_cti_data(
             self, 
-            organism: str | list = "9606", 
+            organism: str | list = None, 
             score_threshold: int | Literal[
                 'highest_confidence',
                 'high_confidence',
@@ -140,27 +234,31 @@ class Compound:
                 
         self.stitch_ints = []
         for tax in tqdm(organism):
+            if str(tax) in ["36329"]:
+                continue
+
             try:
                 organism_stitch_ints = [
                     i for i in stitch.stitch_links_interactions(ncbi_tax_id=int(tax), score_threshold=score_threshold, physical_interaction_score= physical_interaction_score)
                     if i.partner_b in self.string_to_uniprot and i.partner_a in self.pubchem_to_chembl and i.partner_a not in self.pubchem_to_drugbank] # filter with swissprot ids
 
-                # TODO: later engage below print line to biocypher log 
-                # print(f"Downloaded STITCH data with taxonomy id {str(tax)}")
+                logger.debug(f"Downloaded STITCH data with taxonomy id {str(tax)}, interaction count is {len(organism_stitch_ints)}")
 
                 if organism_stitch_ints:
                     self.stitch_ints.extend(organism_stitch_ints)
             
             except TypeError: #'NoneType' object is not an iterator
-                pass
-                # TODO: later engage below print line to biocypher log 
-                # print(f'Skipped tax id {tax}. This is most likely due to the empty file in database. Check the database file.')
+                
+                logger.debug(f'Skipped tax id {tax}. This is most likely due to the empty file in database. Check the database file.')
 
 
         t1 = time()        
         logger.info(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
     def process_stitch_cti_data(self):
+
+        if not hasattr(self, "stitch_ints"):
+            self.download_stitch_cti_data()
         
         logger.debug("Started processing STITCH data")
         t0 = time()
@@ -180,23 +278,55 @@ class Compound:
         # sort by stitch_combined_score
         stitch_cti_df.sort_values(by="stitch_combined_score", ignore_index=True, inplace=True, ascending=False)
         
-        self.stitch_cti_duplicate_removed_df = stitch_cti_df.groupby(["chembl", "uniprot_id"], sort=False, as_index=False).aggregate({
+        stitch_cti_df = stitch_cti_df.groupby(["chembl", "uniprot_id"], sort=False, as_index=False).aggregate({
                                                                                            "chembl":"first",
                                                                                            "uniprot_id":"first",
                                                                                            "stitch_combined_score":self.get_median, 
                                                                                            "source":"first"}).replace("", np.nan)
 
         
-        self.stitch_cti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
+        stitch_cti_df.fillna(value=np.nan, inplace=True)
         
         t1 = time()        
         logger.info(f'STITCH data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return stitch_cti_df      
         
-    def get_compound_nodes(self):
+    def merge_all_ctis(self):
+
+        stitch_cti_df = self.process_stitch_cti_data()
+        chembl_cti_df = self.process_chembl_cti_data()
+        
+        logger.debug("Started merging Chembl and Stitch CTI (Compound-Target Interaction) data")
+        t0 = time()
+        
+        # merge chembl and stitch cti data
+        chembl_plus_stitch_cti_df = chembl_cti_df.merge(stitch_cti_df, 
+                                                        how="outer", on=["uniprot_id", "chembl"])
+        
+        # merge source column
+        chembl_plus_stitch_cti_df["source"] = chembl_plus_stitch_cti_df[["source_x", "source_y"]].apply(
+        self.merge_source_column, axis=1)
+        
+        # drop redundant columns
+        chembl_plus_stitch_cti_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        t1 = time()        
+        logger.info(f'Chembl and Stitch CTI data is merged in {round((t1-t0) / 60, 2)} mins')
+        
+        return chembl_plus_stitch_cti_df
+    
+    def get_compound_nodes(self, label: str = "compound", 
+                           rename_node_fields : dict | None = {"std_inchi":"inchi",
+                                                        "std_inchi_key":"inchikey",
+                                                        "canonical_smiles":"smiles"}):
         """
-        Reformats compound node data to be ready for import into a BioCypher database.
+        Reformats compound node data to be ready for import into the BioCypher.
         """
-        logger.debug('Writing compound nodes...')
+        if not hasattr(self, "compounds"):
+            self.download_chembl_data()
+
+        logger.debug('Creating compound nodes.')
         
         # will filter out chembl ids whether they have edge or not
         activities_chembl = set()
@@ -208,30 +338,63 @@ class Compound:
                 activities_chembl.add(act.chembl)
                 
         
-        self.compound_nodes = []
+        compound_nodes = []
+
+        counter = 0
         for compound in tqdm(self.compounds):
             
             if compound.structure_type == "MOL" and compound.chembl not in self.chembl_to_drugbank and compound.chembl in activities_chembl:
                 
-                compound_id = normalize_curie('chembl:' + compound.chembl)
-                if compound.qed_weighted:
-                    qed_score = float(compound.qed_weighted)
-                else:
-                    qed_score = compound.qed_weighted
-                    
-                props = {
-                    'type': compound.type,
-                    'full_mwt': compound.full_mwt,
-                    'species': compound.species,
-                    'heavy_atoms': compound.heavy_atoms,
-                    'alogp': compound.alogp,
-                    'inchi': compound.std_inchi,
-                    'inchikey': compound.std_inchi_key,
-                    'qed_score': qed_score,
-                }
+                compound_id = self.add_prefix_to_id('chembl' + compound.chembl)
+
+                _dict = compound._asdict()
+                if rename_node_fields:
+                    _dict = {rename_node_fields[k] if k in rename_node_fields.keys() else k:v for k, v in _dict.items()}
+
+                props = {k for k, value in _dict.items() if k in self.node_fields and value}
                 
-                self.compound_nodes.append((compound_id, 'compound', props))
-    
+                compound_nodes.append((compound_id, label, props))
+
+                counter += 1
+
+                if self.early_stopping and counter >= self.early_stopping:
+                    break
+
+        return compound_nodes
+        
+        
+    def get_cti_edges(self, label="compound_targets_protein"):
+        """
+        Reformats compound-target edge data to be ready for import into the BioCypher.
+        """
+        chembl_cti_df = self.merge_all_ctis()
+
+        logger.debug('Creating compound-target edges.')
+
+        cti_edge_list = []
+        
+        for index, row in tqdm(chembl_cti_df.iterrows(), total=chembl_cti_df.shape[0]):
+            
+            _dict = row.to_dict()
+            source = self.add_prefix_to_id('chembl' + _dict["chembl"])
+            target = self.add_prefix_to_id('uniprot' +_dict["uniprot_id"])
+
+            del _dict["chembl"], _dict["uniprot_id"]
+            props = dict()
+            for k, v in _dict.items():
+                if k in self.cti_edge_fields and str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
+                    else:
+                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
+
+
+            cti_edge_list.append((None, source, target, label, props))
+
+            if self.early_stopping and index == self.early_stopping:
+                break
+
+        return cti_edge_list
     
     def get_median(self, element):
         return round(float(element.dropna().median()), 3)
@@ -274,101 +437,24 @@ class Compound:
                 _list.append(e)
 
         return joiner.join(list(dict.fromkeys(_list).keys()))
-        
-        
-    def process_chembl_cti_data(self):
-        
-        logger.debug("Started Chembl processing compound-target interaction data")
-        t0 = time()
-        
-        df_list = []
-        
-        # filter activities
-        for act in self.chembl_acts:
-            if act.assay_chembl in self.assay_dict and act.chembl not in self.chembl_to_drugbank and all([True if item else False for item in [act.standard_value,
-                                                                                            act.standard_type,
-                                                                                           self.target_dict.get(act.target_chembl, None)]]):
-
-                df_list.append((act.chembl, act.pchembl, act.standard_value, act.standard_type, act.assay_chembl, 
-                                self.target_dict.get(act.target_chembl, None), str(self.document_to_pubmed.get(act.document, None)),
-                               self.assay_dict[act.assay_chembl].confidence_score,))
-
-        
-        # create dataframe
-        chembl_cti_df = pd.DataFrame(df_list, columns=["chembl", "pchembl", "activity_value", "activity_type", "assay_chembl", "uniprot_id",
-                                                      "references", "confidence_score"])
-
-        chembl_cti_df.fillna(value=np.nan, inplace=True)
-        chembl_cti_df.replace("None", np.nan, inplace=True)
-
-        # add source
-        chembl_cti_df["source"] = "ChEMBL"
-        
-        # sort by activity value
-        chembl_cti_df.sort_values(by="activity_value", ignore_index=True, inplace=True)
-        
-        # multiple processing
-        self.chembl_cti_duplicate_removed_df = chembl_cti_df.groupby(["uniprot_id", "chembl"], sort=False, as_index=False).aggregate({
-                                                                                           "chembl":"first",
-                                                                                           "pchembl":self.get_median,
-                                                                                           "activity_value":self.get_median,
-                                                                                           "activity_type":self.get_middle_row,
-                                                                                           "assay_chembl":self.aggregate_column_level,
-                                                                                           "uniprot_id":"first",
-                                                                                           "references":self.aggregate_column_level,
-                                                                                           "confidence_score":self.get_middle_row,
-                                                                                           "source":"first"}).replace("", np.nan)
-        
-        self.chembl_cti_duplicate_removed_df.fillna(value=np.nan, inplace=True)
-        
-        t1 = time()
-        logger.info(f'Chembl data is processed in {round((t1-t0) / 60, 2)} mins')
-        
-        
-    def merge_all_ctis(self):
-        
-        logger.debug("Started merging Chembl and Stitch CTI (Compound-Target Interaction) data")
-        t0 = time()
-        
-        # merge chembl and stitch cti data
-        chembl_plus_stitch_cti_df = self.chembl_cti_duplicate_removed_df.merge(self.stitch_cti_duplicate_removed_df, 
-                                                                               how="outer", on=["uniprot_id", "chembl"])
-        
-        # merge source column
-        chembl_plus_stitch_cti_df["source"] = chembl_plus_stitch_cti_df[["source_x", "source_y"]].apply(
-        self.merge_source_column, axis=1)
-        
-        # drop redundant columns
-        chembl_plus_stitch_cti_df.drop(columns=["source_x", "source_y"], inplace=True)
-        
-        t1 = time()        
-        logger.info(f'Chembl and Stitch CTI data is merged in {round((t1-t0) / 60, 2)} mins')
-        
-        self.all_cti_df = chembl_plus_stitch_cti_df
-        
-        
-    def get_cti_edges(self):
+    
+    def add_prefix_to_id(self, prefix, identifier : str = None, sep=":") -> str:
         """
-        Reformats compound-target edge data to be ready for import into a BioCypher database.
+        Adds prefix to ids
         """
-
-        logger.debug('Writing compound-target edges...')
-        self.cti_edge_list = []
+        if self.add_prefix and identifier:
+            return normalize_curie(prefix + sep + str(identifier))
         
-        for _, row in tqdm(self.all_cti_df.iterrows(), total=self.all_cti_df.shape[0]):
-            
-            _dict = row.to_dict()
-            source = normalize_curie('chembl:' + _dict["chembl"])
-            target = normalize_curie('uniprot:' +_dict["uniprot_id"])
+        return identifier
+    
+    def set_node_fields(self, node_fields):
+        if node_fields:
+            self.node_fields = node_fields
+        else:
+            self.node_fields = [field.value for field in CompoundNodeField]
 
-            del _dict["chembl"], _dict["uniprot_id"]
-            props = dict()
-            for k, v in _dict.items():
-                if str(v) != "nan":
-                    if isinstance(v, str) and "|" in v:
-                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
-                    else:
-                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
-
-
-            self.cti_edge_list.append((None, source, target, "compound_targets_protein", props))
+    def set_edge_fields(self, cti_edge_fields):
+        if cti_edge_fields:
+            self.cti_edge_fields = cti_edge_fields
+        else:
+            self.cti_edge_fields = [field.value for field in CompoundCTIEdgeField]
