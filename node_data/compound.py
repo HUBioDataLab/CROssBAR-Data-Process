@@ -42,12 +42,22 @@ class CompoundCTIEdgeField(Enum):
 class Compound:
     """
     Class that downloads compound data using pypath and reformats it to be ready
-    for import into a BioCypher database.
+    for import into the BioCypher.
     """
 
     def __init__(self, node_fields:Union[list[CompoundNodeField], None] = None,
                  cti_edge_fields:Union[list[CompoundCTIEdgeField], None] = None,
                  add_prefix = True, test_mode = False):
+        
+        """
+        Initialize the Compound class.
+
+        Parameters:
+        - node_fields: List of CompoundNodeFieldModel defining Compound node fields.
+        - cti_edge_fields: List of CompoundCTIEdgeFieldModel defining Compound-Target interaction edge fields.
+        - add_prefix: Boolean indicating whether to add a prefix.
+        - test_mode: Boolean indicating whether to enable test mode.
+        """
         
         self.add_prefix = add_prefix
 
@@ -101,7 +111,7 @@ class Compound:
         logger.info(f'All data is processed in {round((t1-t0) / 60, 2)} mins'.upper())
         
             
-    def download_chembl_data(self):
+    def download_chembl_data(self) -> None:
         
         t0 = time()
         logger.debug('Started downloading Chembl data')
@@ -129,7 +139,7 @@ class Compound:
         t1 = time()
         logger.info(f'Chembl data is downloaded in {round((t1-t0) / 60, 2)} mins')
 
-    def process_chembl_cti_data(self):
+    def process_chembl_cti_data(self) -> pd.DataFrame:
 
         if not hasattr(self, "chembl_acts"):
             self.download_chembl_data()
@@ -193,7 +203,7 @@ class Compound:
                 'low_confidence',
                 ] = 'high_confidence', 
             physical_interaction_score: bool = False, # currently this arg doesnt work for organisms other than human. can be fixed if necessary.
-            ):
+            ) -> None:
         
         
         if organism is None:
@@ -255,7 +265,7 @@ class Compound:
         t1 = time()        
         logger.info(f'STITCH data is downloaded in {round((t1-t0) / 60, 2)} mins')
         
-    def process_stitch_cti_data(self):
+    def process_stitch_cti_data(self) -> pd.DataFrame:
 
         if not hasattr(self, "stitch_ints"):
             self.download_stitch_cti_data()
@@ -292,7 +302,7 @@ class Compound:
 
         return stitch_cti_df      
         
-    def merge_all_ctis(self):
+    def merge_all_ctis(self) -> pd.DataFrame:
 
         stitch_cti_df = self.process_stitch_cti_data()
         chembl_cti_df = self.process_chembl_cti_data()
@@ -319,7 +329,7 @@ class Compound:
     def get_compound_nodes(self, label: str = "compound", 
                            rename_node_fields : dict | None = {"std_inchi":"inchi",
                                                         "std_inchi_key":"inchikey",
-                                                        "canonical_smiles":"smiles"}):
+                                                        "canonical_smiles":"smiles"}) -> list[tuple]:
         """
         Reformats compound node data to be ready for import into the BioCypher.
         """
@@ -363,7 +373,7 @@ class Compound:
         return compound_nodes
         
         
-    def get_cti_edges(self, label="compound_targets_protein"):
+    def get_cti_edges(self, label="compound_targets_protein") -> list[tuple]:
         """
         Reformats compound-target edge data to be ready for import into the BioCypher.
         """
