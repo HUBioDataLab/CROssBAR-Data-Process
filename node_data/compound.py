@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import os
 import collections
 
 from pypath.share import curl, settings, common
@@ -47,7 +49,8 @@ class Compound:
 
     def __init__(self, node_fields:Union[list[CompoundNodeField], None] = None,
                  cti_edge_fields:Union[list[CompoundCTIEdgeField], None] = None,
-                 add_prefix = True, test_mode = False):
+                 add_prefix = True, test_mode = False, export_csv = False,
+                 output_dir = None):
         
         """
         Initialize the Compound class.
@@ -60,6 +63,8 @@ class Compound:
         """
         
         self.add_prefix = add_prefix
+        self.export_csv = export_csv
+        self.output_dir = output_dir
 
         # set node fields
         self.set_node_fields(node_fields=node_fields)
@@ -324,6 +329,16 @@ class Compound:
         t1 = time()        
         logger.info(f'Chembl and Stitch CTI data is merged in {round((t1-t0) / 60, 2)} mins')
         
+        # write CTI data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "CTI.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "CTI.csv")
+
+            chembl_plus_stitch_cti_df.to_csv(full_path, index=False)
+            logger.info(f"CTI edge data is written: {full_path}")
+
         return chembl_plus_stitch_cti_df
     
     def get_compound_nodes(self, label: str = "compound", 
@@ -346,10 +361,8 @@ class Compound:
                                                                                            self.target_dict.get(act.target_chembl, None)]]):
 
                 activities_chembl.add(act.chembl)
-                
         
         compound_nodes = []
-
         counter = 0
         for compound in tqdm(self.compounds):
             
@@ -361,7 +374,7 @@ class Compound:
                 if rename_node_fields:
                     _dict = {rename_node_fields[k] if k in rename_node_fields.keys() else k:v for k, v in _dict.items()}
 
-                props = {k for k, value in _dict.items() if k in self.node_fields and value}
+                props = {k:value for k, value in _dict.items() if k in self.node_fields and value}
                 
                 compound_nodes.append((compound_id, label, props))
 
@@ -369,6 +382,23 @@ class Compound:
 
                 if self.early_stopping and counter >= self.early_stopping:
                     break
+        
+        # write compound node data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Compound.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Compound.csv")
+
+            df_list = []
+            
+            for compound_id, _, props in compound_nodes:
+                row = {"compound_id":compound_id} | props
+                df_list.append(row)
+
+            df = pd.DataFrame.from_records(df_list)
+            df.to_csv(full_path, index=False)
+            logger.info(f"Compound node data is written: {full_path}")
 
         return compound_nodes
         
