@@ -663,16 +663,17 @@ class Disease:
         t0 = time()
 
         df_list = []
-        for disease, targets in self.opentargets_direct.items():
-            db = disease.split("_")[0]
-            for target in targets:
-                if self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target["targetId"]))\
-                and self.mondo_mappings[db].get(disease.split("_")[1]):
-                    score = round(target["score"], 3)
-                    if score != 0.0:
-                        gene_id = self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target["targetId"]))
-                        disease_id = self.mondo_mappings[db].get(disease.split("_")[1])
-                        df_list.append((gene_id, disease_id, score))
+        for entry in self.opentargets_direct:
+            disease = entry['diseaseId']
+            db = entry['diseaseId'].split("_")[0]
+            target = entry['targetId']
+            if self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target))\
+            and self.mondo_mappings[db].get(disease.split("_")[1]):
+                score = round(entry["score"], 3)
+                if score != 0.0:
+                    gene_id = self.uniprot_to_entrez.get(self.ensembl_gene_to_uniprot.get(target))
+                    disease_id = self.mondo_mappings[db].get(disease.split("_")[1])
+                    df_list.append((gene_id, disease_id, score))
                     
         
         df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "opentargets_score"])
@@ -699,10 +700,10 @@ class Disease:
         
         df_list = []
         for dg in tqdm(self.diseases_knowledge):
-            if self.ensembl_protein_to_uniprot.get(dg.gene_identifier) and self.mondo_mappings["DOID"].get(dg.disease_identifier.split(":")[1]):
+            if self.ensembl_protein_to_uniprot.get(dg.gene_id) and self.mondo_mappings["DOID"].get(dg.disease_id.split(":")[1]):
                 
-                gene_id = self.ensembl_protein_to_uniprot.get(dg.gene_identifier)
-                disease_id = self.mondo_mappings["DOID"].get(dg.disease_identifier.split(":")[1])
+                gene_id = self.ensembl_protein_to_uniprot.get(dg.gene_id)
+                disease_id = self.mondo_mappings["DOID"].get(dg.disease_id.split(":")[1])
                 df_list.append((gene_id, disease_id))
 
         diseases_knowledge_df = pd.DataFrame(df_list, columns=["gene_id", "disease_id",])
@@ -713,10 +714,10 @@ class Disease:
 
         df_list = []
         for dg in tqdm(self.diseases_experimental):
-            if self.ensembl_protein_to_uniprot.get(dg.gene_identifier) and self.mondo_mappings["DOID"].get(dg.disease_identifier.split(":")[1]):
-                gene_id = self.ensembl_protein_to_uniprot.get(dg.gene_identifier)
-                disease_id = self.mondo_mappings["DOID"].get(dg.disease_identifier.split(":")[1])
-                score = float(dg.confidence_score)
+            if self.ensembl_protein_to_uniprot.get(dg.gene_id) and self.mondo_mappings["DOID"].get(dg.disease_id.split(":")[1]):
+                gene_id = self.ensembl_protein_to_uniprot.get(dg.gene_id)
+                disease_id = self.mondo_mappings["DOID"].get(dg.disease_id.split(":")[1])
+                score = float(dg.confidence)
                 df_list.append((gene_id, disease_id, score))
 
         diseases_experimental_df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "diseases_confidence_score"])
@@ -817,13 +818,14 @@ class Disease:
         t0 = time()
 
         df_list = []
-        for v in tqdm(self.humsavar_data):
-            if v.variant_category == "LP/P" and v.disease_omim_id and v.dbSNP and self.uniprot_to_entrez.get(v.swiss_prot_ac)\
-            and self.mondo_mappings["OMIM"].get(v.disease_omim_id.split(":")[1]):
-                gene_id = self.uniprot_to_entrez.get(v.swiss_prot_ac)
-                disease_id = self.mondo_mappings["OMIM"].get(v.disease_omim_id.split(":")[1])
-                df_list.append((gene_id, disease_id, v.dbSNP))
-                
+        for protein, variant_set in tqdm(self.humsavar_data.items()):
+            for variant in variant_set:
+                if variant.variant_category == "LP/P" and variant.disease_omim and variant.dbsnp and self.uniprot_to_entrez.get(protein)\
+                and self.mondo_mappings["OMIM"].get(variant.disease_omim.split(":")[1]):
+                    gene_id = self.uniprot_to_entrez.get(protein)
+                    disease_id = self.mondo_mappings["OMIM"].get(variant.disease_omim.split(":")[1])
+                    df_list.append((gene_id, disease_id, variant.dbsnp))
+                                    
         df = pd.DataFrame(df_list, columns=["gene_id", "disease_id", "dbsnp_id"])
         df["source"] = "Humsavar"
         df["variant_source"] = "Humsavar"
