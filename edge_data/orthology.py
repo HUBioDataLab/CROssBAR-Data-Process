@@ -3,15 +3,66 @@ from __future__ import annotations
 from pypath.share import curl, settings
 from pypath.inputs import oma, uniprot, pharos
 from pypath.utils import taxonomy
+
+from typing import Union
 from contextlib import ExitStack
 from bioregistry import normalize_curie
 from time import time
 
 import pandas as pd
-import numpy as np 
+import numpy as np
+
+from enum import Enum, IntEnum
+from pydantic import BaseModel, DirectoryPath, validate_call
 
 from biocypher._logger import logger
-from tqdm.notebook import tqdm
+from tqdm import tqdm
+
+logger.debug(f"Loading module {__name__}.")
+
+class OrthologyEdgeField(Enum):
+    RELATION_TYPE = "rel_type"
+    OMA_ORTHOLOGY_SCORE = "score"
+
+class OMA_ORGANISMS(IntEnum):
+    TAX_4932 = 4932 # s. cerevisiae
+    TAX_10090 = 10090 # mouse
+    TAX_3702 = 3702
+    TAX_10116 = 10116 # rat
+    TAX_559292 = 559292
+    TAX_9913 = 9913 # cow
+    TAX_1264690 = 1264690
+    TAX_83333 = 83333
+    TAX_6239 = 6239 # c. elegans
+    TAX_1423 = 1423
+    TAX_39947 = 39947
+    TAX_44689 = 44689
+    TAX_7227 =  7227 # drosophila
+    TAX_8355 = 8355 # Xenopus laevis
+    TAX_7955 = 7955 # zebrafish
+    TAX_9031 = 9031 # chicken
+    TAX_1773 = 1773
+    TAX_9598 = 9598 # chimp - APES TOGETHER STRONG
+    TAX_9544 = 9544 # Macaca - APES TOGETHER STRONG
+    TAX_9595 = 9595 # GORILLA GORILLA GORILLA - APES TOGETHER STRONG
+    TAX_9601 = 9601 # orangutan - APES TOGETHER STRONG
+
+class PHAROS_ORGANISMS(Enum):
+    MOUSE = "Mouse"
+    COW = "Cow"
+    XENOPUS = "Xenopus"
+    ZEBRAFISH = "Zebrafish"
+    RAT = "Rat"
+    C_ELEGANS = "C. elegans"
+    S_CEREVISIA = "S.cerevisiae"
+    CHICKEN = "Chicken"
+    CHIMP = "Chimp" # APES TOGETHER STRONG
+    FRUITFLY = "Fruitfly"
+    DOG = "Dog"
+    MACAQUE = "Macaque"
+    PIG = "Pig"
+    HORSE = "Horse"
+
 
 
 OMA_ORGANISMS = {
@@ -32,12 +83,21 @@ OMA_ORGANISMS = {
     7955, # zebrafish
     9031, # chicken
     1773,
-    9601,
     9598, # chimp - APES TOGETHER STRONG
     9544, # Macaca - APES TOGETHER STRONG
     9595, # GORILLA GORILLA GORILLA - APES TOGETHER STRONG
     9601, # orangutan - APES TOGETHER STRONG
 }.union(set(taxonomy.taxids.keys()))
+
+class OrthologyModel(BaseModel):
+    edge_fields:Union[list[OrthologyEdgeField], None] = None
+    oma_organisms:Union[list[OMA_ORGANISMS], None] = None
+    pharos_organisms:Union[list[PHAROS_ORGANISMS], None] = None
+    merge_with_pypath_taxids: bool = True
+    add_prefix: bool = True
+    test_mode: bool = False
+    export_csv: bool = False
+    output_dir: DirectoryPath | None = None
 
 
 class Orthology:
@@ -45,8 +105,24 @@ class Orthology:
     Class that downloads orthology data using pypath and reformats it to be ready
     for import into a BioCypher database.
     """
-    
-    def download_orthology_data(self, cache=False, debug=False, retries=3,):
+
+    def __init__(self, edge_fields:Union[list[OrthologyEdgeField], None] = None,
+                 oma_organisms:Union[list[OMA_ORGANISMS], None] = None,
+                 pharos_organisms:Union[list[PHAROS_ORGANISMS], None] = None,
+                 merge_with_pypath_taxids: bool = True,
+                 add_prefix: bool = True,
+                 test_mode: bool = False,
+                 export_csv: bool = False,
+                 output_dir: DirectoryPath | None = None):
+        
+        model = OrthologyModel(edge_fields=edge_fields, oma_organisms=oma_organisms,
+                               pharos_organisms=pharos_organisms, 
+                               merge_with_pypath_taxids=merge_with_pypath_taxids,
+                               add_prefix=add_prefix, test_mode=test_mode,
+                               export_csv=export_csv, output_dir=output_dir).model_dump()
+
+    @validate_call
+    def download_orthology_data(self, cache: bool = False, debug: bool = False, retries: int = 3,):
         """
         Wrapper function to download orthology data from various databases using pypath.
 
@@ -84,10 +160,10 @@ class Orthology:
             tax: list of taxids to download data for.
         """
 
-        self.entry_name_to_uniprot = uniprot.uniprot_data(field= 'entry name', reviewed = True, organism= '*')
+        self.entry_name_to_uniprot = uniprot.uniprot_data(field = 'id', reviewed = True, organism= '*')
         self.entry_name_to_uniprot = {v:k for k,v in self.entry_name_to_uniprot.items()}
         
-        uniprot_to_entrez = uniprot.uniprot_data(field= 'database(GeneID)', reviewed = True, organism= '*')        
+        uniprot_to_entrez = uniprot.uniprot_data(field= 'xref_geneid', reviewed = True, organism= '*')        
         self.uniprot_to_entrez = dict()
         for k, v in uniprot_to_entrez.items():
             self.uniprot_to_entrez[k] = v.strip(";").split(";")[0]
@@ -139,7 +215,7 @@ class Orthology:
         logger.debug("Started downloading Pharos orthology data")
         t0 = time()
 
-        uniprot_to_entrez = uniprot.uniprot_data(field= 'database(GeneID)', reviewed = True, organism= '*')
+        uniprot_to_entrez = uniprot.uniprot_data(field= 'xref_geneid', reviewed = True, organism= '*')
         self.entrez_to_uniprot = {}
         for k,v in uniprot_to_entrez.items():
             for entrez in v.strip(';').split(';'):
