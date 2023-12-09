@@ -17,8 +17,11 @@ from time import time
 
 from tqdm import tqdm
 from enum import Enum
+from pydantic import BaseModel, DirectoryPath, validate_call
 
 from biocypher._logger import logger
+
+logger.debug(f"Loading module {__name__}.")
 
 class CompoundNodeField(Enum):
     TYPE = "type"
@@ -40,6 +43,13 @@ class CompoundCTIEdgeField(Enum):
     CONFIDENCE_SCORE = "confidence_score"
     STITCH_COMBINED_SCORE = "stitch_combined_score"
 
+class CompoundModel(BaseModel):
+    node_fields:Union[list[CompoundNodeField], None] = None
+    cti_edge_fields:Union[list[CompoundCTIEdgeField], None] = None
+    test_mode: bool = False
+    add_prefix: bool = True
+    export_csv: bool = False
+    output_dir: DirectoryPath | None = None
 
 class Compound:
     """
@@ -49,8 +59,10 @@ class Compound:
 
     def __init__(self, node_fields:Union[list[CompoundNodeField], None] = None,
                  cti_edge_fields:Union[list[CompoundCTIEdgeField], None] = None,
-                 add_prefix = True, test_mode = False, export_csv = False,
-                 output_dir = None):
+                 add_prefix: bool = True, 
+                 test_mode: bool = False, 
+                 export_csv: bool = False,
+                 output_dir: DirectoryPath | None = None):
         
         """
         Initialize the Compound class.
@@ -61,23 +73,28 @@ class Compound:
         - add_prefix: Boolean indicating whether to add a prefix.
         - test_mode: Boolean indicating whether to enable test mode.
         """
+
+        model = CompoundModel(node_fields=node_fields, cti_edge_fields=cti_edge_fields,
+                              test_mode=test_mode, add_prefix=add_prefix, export_csv=export_csv,
+                              output_dir=output_dir).model_dump()
         
-        self.add_prefix = add_prefix
-        self.export_csv = export_csv
-        self.output_dir = output_dir
+        self.add_prefix = model["add_prefix"]
+        self.export_csv = model["export_csv"]
+        self.output_dir = model["output_dir"]
 
         # set node fields
-        self.set_node_fields(node_fields=node_fields)
+        self.set_node_fields(node_fields=model["node_fields"])
 
         # set cti edge fields
-        self.set_edge_fields(cti_edge_fields=cti_edge_fields)
+        self.set_edge_fields(cti_edge_fields=model["cti_edge_fields"])
 
         # set early_stopping, if test_mode true
         self.early_stopping = None
-        if test_mode:
+        if model["test_mode"]:
             self.early_stopping = 100
 
-    def download_compound_data(self, cache=False, debug=False, retries=3,):
+    @validate_call
+    def download_compound_data(self, cache: bool = False, debug: bool = False, retries: int = 3,):
         """
         Wrapper function to download compound data from Chembl database using pypath.
         
@@ -152,6 +169,7 @@ class Compound:
         logger.debug("Started Chembl processing compound-target interaction data")
         t0 = time()
         
+        # define a list for creating dataframe
         df_list = []
         
         # filter activities
@@ -197,10 +215,10 @@ class Compound:
 
         return chembl_cti_df
         
-    
+    @validate_call
     def download_stitch_cti_data(
             self, 
-            organism: str | list = None, 
+            organism: str | list | None = None, 
             score_threshold: int | Literal[
                 'highest_confidence',
                 'high_confidence',
@@ -220,7 +238,7 @@ class Compound:
         t0 = time()
         
         # map string ids to swissprot ids
-        uniprot_to_string = uniprot.uniprot_data("database(STRING)", "*", True)
+        uniprot_to_string = uniprot.uniprot_data("xref_string", "*", True)
         self.string_to_uniprot = collections.defaultdict(list)
         for k,v in uniprot_to_string.items():
             for string_id in list(filter(None, v.split(";"))):
@@ -341,6 +359,7 @@ class Compound:
 
         return chembl_plus_stitch_cti_df
     
+    @validate_call
     def get_compound_nodes(self, label: str = "compound", 
                            rename_node_fields : dict | None = {"std_inchi":"inchi",
                                                         "std_inchi_key":"inchikey",
@@ -368,7 +387,7 @@ class Compound:
             
             if compound.structure_type == "MOL" and compound.chembl not in self.chembl_to_drugbank and compound.chembl in activities_chembl:
                 
-                compound_id = self.add_prefix_to_id('chembl' + compound.chembl)
+                compound_id = self.add_prefix_to_id('chembl', compound.chembl)
 
                 _dict = compound._asdict()
                 if rename_node_fields:
@@ -402,7 +421,7 @@ class Compound:
 
         return compound_nodes
         
-        
+    @validate_call
     def get_cti_edges(self, label="compound_targets_protein") -> list[tuple]:
         """
         Reformats compound-target edge data to be ready for import into the BioCypher.
@@ -416,8 +435,8 @@ class Compound:
         for index, row in tqdm(chembl_cti_df.iterrows(), total=chembl_cti_df.shape[0]):
             
             _dict = row.to_dict()
-            source = self.add_prefix_to_id('chembl' + _dict["chembl"])
-            target = self.add_prefix_to_id('uniprot' +_dict["uniprot_id"])
+            source = self.add_prefix_to_id('chembl', _dict["chembl"])
+            target = self.add_prefix_to_id('uniprot', _dict["uniprot_id"])
 
             del _dict["chembl"], _dict["uniprot_id"]
             props = dict()
@@ -478,7 +497,8 @@ class Compound:
 
         return joiner.join(list(dict.fromkeys(_list).keys()))
     
-    def add_prefix_to_id(self, prefix, identifier : str = None, sep=":") -> str:
+    @validate_call
+    def add_prefix_to_id(self, prefix: str, identifier : str = None, sep=":") -> str:
         """
         Adds prefix to ids
         """
