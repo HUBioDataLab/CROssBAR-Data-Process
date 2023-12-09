@@ -31,7 +31,7 @@ class CompoundNodeField(Enum):
     ALOGP = "alogp"
     INCHI = "std_inchi"
     INCHIKEY = "std_inchi_key"
-    QED_SCORE = "qed_score"
+    QED_SCORE = "qed_weighted"
     SMILES = "canonical_smiles"
 
 class CompoundCTIEdgeField(Enum):
@@ -363,7 +363,8 @@ class Compound:
     def get_compound_nodes(self, label: str = "compound", 
                            rename_node_fields : dict | None = {"std_inchi":"inchi",
                                                         "std_inchi_key":"inchikey",
-                                                        "canonical_smiles":"smiles"}) -> list[tuple]:
+                                                        "canonical_smiles":"smiles",
+                                                        "qed_weighted":"qed_score"}) -> list[tuple]:
         """
         Reformats compound node data to be ready for import into the BioCypher.
         """
@@ -389,11 +390,11 @@ class Compound:
                 
                 compound_id = self.add_prefix_to_id('chembl', compound.chembl)
 
-                _dict = compound._asdict()
-                if rename_node_fields:
-                    _dict = {rename_node_fields[k] if k in rename_node_fields.keys() else k:v for k, v in _dict.items()}
-
+                _dict = compound._asdict()        
                 props = {k:value for k, value in _dict.items() if k in self.node_fields and value}
+                
+                if rename_node_fields:
+                    props = {rename_node_fields[k] if k in rename_node_fields.keys() else k:v for k, v in props.items()}
                 
                 compound_nodes.append((compound_id, label, props))
 
