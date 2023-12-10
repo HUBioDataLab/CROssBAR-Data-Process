@@ -67,11 +67,13 @@ class Compound:
         """
         Initialize the Compound class.
 
-        Parameters:
-        - node_fields: List of CompoundNodeFieldModel defining Compound node fields.
-        - cti_edge_fields: List of CompoundCTIEdgeFieldModel defining Compound-Target interaction edge fields.
-        - add_prefix: Boolean indicating whether to add a prefix.
-        - test_mode: Boolean indicating whether to enable test mode.
+        Args:
+            node_fields: Compound node fields that will be included in graph, if defined it must be values of elements from CompoundNodeField enum class (not the names)
+            cti_edge_fields: Compound-target edge fields that will be included in grah, if defined it must be values of elements from CompoundCTIEdgeField enum class (not the names)
+            add_prefix: if True, add prefix to database identifiers
+            test_mode: if True, limits amount of output data
+            export_csv: if True, export data as csv
+            output_dir: Location of csv export if `export_csv` is True, if not defined it will be current directory
         """
 
         model = CompoundModel(node_fields=node_fields, cti_edge_fields=cti_edge_fields,
