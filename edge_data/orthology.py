@@ -8,6 +8,7 @@ from typing import Union
 from contextlib import ExitStack
 from bioregistry import normalize_curie
 from time import time
+import os 
 
 import pandas as pd
 import numpy as np
@@ -21,8 +22,8 @@ from tqdm import tqdm
 logger.debug(f"Loading module {__name__}.")
 
 class OrthologyEdgeField(Enum):
-    RELATION_TYPE = "rel_type"
-    OMA_ORTHOLOGY_SCORE = "score"
+    RELATION_TYPE = "relation_type" 
+    OMA_ORTHOLOGY_SCORE = "oma_orthology_score"
 
 class OMA_ORGANISMS(IntEnum):
     TAX_4932 = 4932 # s. cerevisiae
@@ -63,32 +64,6 @@ class PHAROS_ORGANISMS(Enum):
     PIG = "Pig"
     HORSE = "Horse"
 
-
-
-OMA_ORGANISMS = {
-    4932, # s. cerevisiae
-    10090, # mouse
-    3702,
-    10116, # rat
-    559292,
-    9913, # cow
-    1264690,
-    83333,
-    6239, # c. elegans
-    1423,
-    39947,
-    44689,
-    7227, # drosophila
-    8355, # Xenopus laevis
-    7955, # zebrafish
-    9031, # chicken
-    1773,
-    9598, # chimp - APES TOGETHER STRONG
-    9544, # Macaca - APES TOGETHER STRONG
-    9595, # GORILLA GORILLA GORILLA - APES TOGETHER STRONG
-    9601, # orangutan - APES TOGETHER STRONG
-}.union(set(taxonomy.taxids.keys()))
-
 class OrthologyModel(BaseModel):
     edge_fields:Union[list[OrthologyEdgeField], None] = None
     oma_organisms:Union[list[OMA_ORGANISMS], None] = None
@@ -115,11 +90,42 @@ class Orthology:
                  export_csv: bool = False,
                  output_dir: DirectoryPath | None = None):
         
+        """
+        Args:
+            edge_fields: Gene-gene orthology edge fields that will be included in graph, if defined it must be values of elements from OrthologyEdgeField enum class (not the names)
+            oma_organisms: list of taxanomy ids of organisms that will be compared against human to extract orthology relations, if defined it must be values of elements from OMA_ORGANISMS enum class (not the names)
+            pharos_organisms: list of taxanomy names of organisms that will be compared against human to extract orthology relations, if defined it must be values of elements from PHAROS_ORGANISMS enum class (not the names)
+            merge_with_pypath_taxids: Whether to merge `oma_organisms` list with list of pypath's tax ids
+            add_prefix: if True, add prefix to database identifiers
+            test_mode: if True, limits amount of output data
+            export_csv: if True, export data as csv
+            output_dir: Location of csv export, if not defined it will be current director. `export_csv` should be True for this arg.
+        """
+        
         model = OrthologyModel(edge_fields=edge_fields, oma_organisms=oma_organisms,
                                pharos_organisms=pharos_organisms, 
                                merge_with_pypath_taxids=merge_with_pypath_taxids,
                                add_prefix=add_prefix, test_mode=test_mode,
                                export_csv=export_csv, output_dir=output_dir).model_dump()
+        
+        self.add_prefix = model["add_prefix"]
+        self.export_csv = model["export_csv"]
+        self.output_dir = model["output_dir"]
+        
+        # set edge fields
+        self.set_edge_fields(edge_fields=model["edge_fields"])
+
+        # set organism lists
+        self.set_organism_lists(oma_organisms=model["oma_organisms"],
+                                pharos_organisms=model["pharos_organisms"],
+                                merge_with_pypath_taxids=model["merge_with_pypath_taxids"])
+        
+
+        # set early_stopping, if test_mode true
+        self.early_stopping = None
+        if model["test_mode"]:
+            self.early_stopping = 100        
+
 
     @validate_call
     def download_orthology_data(self, cache: bool = False, debug: bool = False, retries: int = 3,):
@@ -145,19 +151,10 @@ class Orthology:
 
             self.download_oma_data()
             self.download_pharos_data()
-            
-            
-    def process_orthology_data(self):
-        
-        self.process_oma_data()
-        self.process_pharos_data()
 
-    def download_oma_data(self, tax=OMA_ORGANISMS):
+    def download_oma_data(self):
         """
         Downloads orthology data from OMA against human.
-
-        Args
-            tax: list of taxids to download data for.
         """
 
         self.entry_name_to_uniprot = uniprot.uniprot_data(field = 'id', reviewed = True, organism= '*')
@@ -173,19 +170,23 @@ class Orthology:
         
         self.oma_orthology = []
 
-        for t in tqdm(tax):
+        for t in tqdm(self.oma_organisms):
             tax_orthology = oma.oma_orthologs(organism_a = 9606, organism_b = t)
             tax_orthology = [i for i in tax_orthology if i.id_a in self.entry_name_to_uniprot and i.id_b in self.entry_name_to_uniprot]
             tax_orthology = [i for i in tax_orthology if self.uniprot_to_entrez.get(self.entry_name_to_uniprot[i.id_a], None) and self.uniprot_to_entrez.get(self.entry_name_to_uniprot[i.id_b], None)]
+            
             self.oma_orthology.extend(tax_orthology)
+            logger.debug(f"Orthology data of tax id {t} is downloaded")
 
         t1 = time()
         logger.info(f'OMA orthology data is downloaded in {round((t1-t0) / 60, 2)} mins')
 
-    def process_oma_data(self):
+    def process_oma_data(self) -> pd.DataFrame:
         """
         Processes orthology data from OMA.
         """
+        if not hasattr(self, "oma_orthology"):
+            self.download_oma_data()
         
         logger.debug("Started processing OMA orthology data")
         t0 = time()
@@ -202,10 +203,12 @@ class Orthology:
         
         oma_orthology_df.sort_values(by="oma_orthology_score", ascending=False, inplace=True)
         
-        self.oma_orthology_duplicate_removed_df = oma_orthology_df[~oma_orthology_df[["entrez_a", "entrez_b"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        oma_orthology_df = oma_orthology_df[~oma_orthology_df[["entrez_a", "entrez_b"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
         
         t1 = time()
         logger.info(f'OMA orthology data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return oma_orthology_df
         
     def download_pharos_data(self):
         """
@@ -227,20 +230,21 @@ class Orthology:
         t1 = time()
         logger.info(f'Pharos orthology data is downloaded in {round((t1-t0) / 60, 2)} mins')
     
-    def process_pharos_data(self):
+    def process_pharos_data(self) -> pd.DataFrame:
         """
         Processes orthology data from Pharos.
         """
+        if not hasattr(self, "pharos_orthology_init"):
+            self.download_pharos_data()
+
         logger.debug("Started processing Pharos orthology data")
         t0 = time()
-        
-        selected_species = ['Mouse', 'Cow', 'Xenopus', 'Zebrafish', 'Rat', 'C. elegans', 'S.cerevisiae', 'Chicken', 'Chimp', 'Fruitfly', 'Dog', 'Macaque', 'Pig', 'Horse',]
-
+    
         df_list = []
         for protein in self.pharos_orthology_init:
             if protein["orthologs"]:
                 for ortholog in protein["orthologs"]:
-                    if ortholog['geneid'] and str(ortholog['geneid']) in self.entrez_to_uniprot and str(ortholog['species']) in selected_species\
+                    if ortholog['geneid'] and str(ortholog['geneid']) in self.entrez_to_uniprot and str(ortholog['species']) in self.pharos_organisms\
                     and protein["uniprot"] in self.uniprot_to_entrez:
                         
                         df_list.append((self.uniprot_to_entrez[protein["uniprot"]], str(ortholog['geneid']) ))
@@ -250,10 +254,77 @@ class Orthology:
 
         pharos_orthology_df["source"] = "Pharos"
         
-        self.pharos_orthology_duplicate_removed_df = pharos_orthology_df[~pharos_orthology_df[["entrez_a", "entrez_b"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
+        pharos_orthology_df = pharos_orthology_df[~pharos_orthology_df[["entrez_a", "entrez_b"]].apply(frozenset, axis=1).duplicated()].reset_index(drop=True)
 
         t1 = time()
         logger.info(f'Pharos orthology data is processed in {round((t1-t0) / 60, 2)} mins')
+
+        return pharos_orthology_df
+    
+    def merge_orthology_data(self) -> pd.DataFrame:
+        """
+        Merges orthology data from OMA and Pharos
+        """
+        logger.debug("Started merged OMA and Pharos orthology data")
+        t0 = time()
+
+        pharos_orthology_df = self.process_pharos_data()
+        oma_orthology_df = self.process_oma_data()
+        
+        oma_plus_pharos_orthology_df = oma_orthology_df.merge(pharos_orthology_df, how="outer",
+                                                                       on=["entrez_a", "entrez_b"])
+        
+        oma_plus_pharos_orthology_df["source"] = oma_plus_pharos_orthology_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
+        
+        oma_plus_pharos_orthology_df.drop(columns=["source_x", "source_y"], inplace=True)
+        
+        t1 = time()
+        logger.info(f'OMA and Pharos orthology data is merged in {round((t1-t0) / 60, 2)} mins')
+
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Orthology.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Orthology.csv")
+
+            oma_plus_pharos_orthology_df.to_csv(full_path, index=False)
+            logger.info(f"Orthology data is written: {full_path}")
+
+        return oma_plus_pharos_orthology_df        
+    
+    @validate_call
+    def get_orthology_edges(self, label: str = "gene_is_orthologous_with_gene") -> list[tuple]:
+        """
+        Reformats orthology data to be ready for import into a BioCypher database.
+        """
+        # define edge list
+        edge_list = []
+        
+        logger.info("Preparing orthology edges.")
+        
+        for index, row in tqdm(self.all_orthology_df.iterrows(), total=self.all_orthology_df.shape[0]):
+            _dict = row.to_dict()
+            
+            source = self.add_prefix_to_id('ncbigene', _dict["entrez_a"])
+            target = self.add_prefix_to_id('ncbigene', _dict["entrez_b"])
+            
+            del _dict["entrez_a"], _dict["entrez_b"]
+            
+            props = dict()
+            for k, v in _dict.items():
+                if k in self.edge_fields and str(v) != "nan":
+                    if isinstance(v, str) and "|" in v:
+                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
+                    else:
+                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
+
+
+            edge_list.append((None, source, target, label, props))
+            
+            if self.early_stopping and (index+1) == self.early_stopping:
+                break
+
+        return edge_list
 
     def merge_source_column(self, element, joiner="|"):
         """
@@ -269,52 +340,36 @@ class Orthology:
 
         return joiner.join(list(dict.fromkeys(_list).keys()))
     
-    def merge_orthology_data(self):
+    @validate_call
+    def add_prefix_to_id(self, prefix : str, identifier : str, sep: str =":") -> str:
         """
-        Merges orthology data from OMA and Pharos
+        Adds prefix to ids
         """
-        logger.debug("Started merged OMA and Pharos orthology data")
-        t0 = time()
+        if self.add_prefix and identifier:
+            return normalize_curie(prefix + sep + str(identifier))
         
-        oma_plus_pharos_orthology_df = self.oma_orthology_duplicate_removed_df.merge(self.pharos_orthology_duplicate_removed_df, how="outer",
-                                                                       on=["entrez_a", "entrez_b"])
-        
-        oma_plus_pharos_orthology_df["source"] = oma_plus_pharos_orthology_df[["source_x", "source_y"]].apply(self.merge_source_column, axis=1)
-        
-        oma_plus_pharos_orthology_df.drop(columns=["source_x", "source_y"], inplace=True)
-        
-        self.all_orthology_df = oma_plus_pharos_orthology_df
-        
-        t1 = time()
-        logger.info(f'OMA and Pharos orthology data is merged in {round((t1-t0) / 60, 2)} mins')        
-    
-    def get_orthology_edges(self, early_stopping=500):
-        """
-        Reformats orthology data to be ready for import into a BioCypher database.
-        """
+        return identifier
 
-        self.edge_list = []
-        
-        logger.info("Preparing orthology edges.")
-        
-        for index, row in tqdm(self.all_orthology_df.iterrows(), total=self.all_orthology_df.shape[0]):
-            _dict = row.to_dict()
-            
-            source = normalize_curie('ncbigene:' + _dict["entrez_a"])
-            target = normalize_curie('ncbigene:' + _dict["entrez_b"])
-            
-            del _dict["entrez_a"], _dict["entrez_b"]
-            
-            props = dict()
-            for k, v in _dict.items():
-                if str(v) != "nan":
-                    if isinstance(v, str) and "|" in v:
-                        props[str(k).replace(" ","_").lower()] = v.replace("'", "^").split("|")
-                    else:
-                        props[str(k).replace(" ","_").lower()] = str(v).replace("'", "^")
+    def set_edge_fields(self, edge_fields):
+        if edge_fields:
+            self.edge_fields = edge_fields
+        else:
+            self.edge_fields = [field.value for field in OrthologyEdgeField]
 
+    def set_organism_lists(self, oma_organisms, pharos_organisms, merge_with_pypath_taxids):
+        # define oma organisms
+        if oma_organisms:
+            self.oma_organisms = set(oma_organisms)
+        else:
+            self.oma_organisms = set([field.value for field in OMA_ORGANISMS])
 
-            self.edge_list.append((None, source, target, "gene_is_orthologous_with_gene", props))
+        # merge organisms with list of pypath taxids
+        if merge_with_pypath_taxids:
+            self.oma_organisms = self.oma_organisms.union(set(taxonomy.taxids.keys()))
+
+        # define pharos organisms
+        if pharos_organisms:
+            self.pharos_organisms = pharos_organisms
+        else:
+            self.pharos_organisms = [field.value for field in PHAROS_ORGANISMS]
             
-            if early_stopping and (index+1) == early_stopping:
-                break
