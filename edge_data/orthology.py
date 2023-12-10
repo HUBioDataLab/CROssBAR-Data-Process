@@ -172,8 +172,8 @@ class Orthology:
 
         for t in tqdm(self.oma_organisms):
             tax_orthology = oma.oma_orthologs(organism_a = 9606, organism_b = t)
-            tax_orthology = [i for i in tax_orthology if i.id_a in self.entry_name_to_uniprot and i.id_b in self.entry_name_to_uniprot]
-            tax_orthology = [i for i in tax_orthology if self.uniprot_to_entrez.get(self.entry_name_to_uniprot[i.id_a], None) and self.uniprot_to_entrez.get(self.entry_name_to_uniprot[i.id_b], None)]
+            tax_orthology = [i for i in tax_orthology if i.a.id in self.entry_name_to_uniprot and i.b.id in self.entry_name_to_uniprot]
+            tax_orthology = [i for i in tax_orthology if self.uniprot_to_entrez.get(self.entry_name_to_uniprot[i.a.id], None) and self.uniprot_to_entrez.get(self.entry_name_to_uniprot[i.b.id], None)]
             
             self.oma_orthology.extend(tax_orthology)
             logger.debug(f"Orthology data of tax id {t} is downloaded")
@@ -193,8 +193,8 @@ class Orthology:
         
         df_list = []
         for ortholog in self.oma_orthology:
-            df_list.append((self.uniprot_to_entrez[self.entry_name_to_uniprot[ortholog.id_a]],
-                            self.uniprot_to_entrez[self.entry_name_to_uniprot[ortholog.id_b]],
+            df_list.append((self.uniprot_to_entrez[self.entry_name_to_uniprot[ortholog.a.id]],
+                            self.uniprot_to_entrez[self.entry_name_to_uniprot[ortholog.b.id]],
                            ortholog.rel_type, round(ortholog.score)))
 
         oma_orthology_df = pd.DataFrame(df_list, columns=["entrez_a", "entrez_b", "relation_type", "oma_orthology_score"])
@@ -297,12 +297,13 @@ class Orthology:
         """
         Reformats orthology data to be ready for import into a BioCypher database.
         """
+        all_orthology_df = self.merge_orthology_data()
         # define edge list
         edge_list = []
         
         logger.info("Preparing orthology edges.")
         
-        for index, row in tqdm(self.all_orthology_df.iterrows(), total=self.all_orthology_df.shape[0]):
+        for index, row in tqdm(all_orthology_df.iterrows(), total=all_orthology_df.shape[0]):
             _dict = row.to_dict()
             
             source = self.add_prefix_to_id('ncbigene', _dict["entrez_a"])
@@ -372,4 +373,3 @@ class Orthology:
             self.pharos_organisms = pharos_organisms
         else:
             self.pharos_organisms = [field.value for field in PHAROS_ORGANISMS]
-            
