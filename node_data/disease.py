@@ -6,7 +6,6 @@ from pypath.inputs import (
     ctdbase,
     clinvar,
     # disgenet,
-    pharos,
     chembl,
     diseases,
     opentargets,
@@ -25,7 +24,8 @@ from pypath.formats import obo
 from pypath.utils import mapping
 from pypath.share import cache
 
-
+from typing import Union
+from pydantic import BaseModel, DirectoryPath, validate_call
 from contextlib import ExitStack
 
 from bioregistry import normalize_curie
@@ -94,6 +94,18 @@ class DISEASE_TO_DISEASE_INTERACTION_FIELD(Enum):
     DISGENET_JACCARD_VARIANTS_SCORE = "disgenet_jaccard_variants_score"
 
 
+class DiseaseModel(BaseModel):
+    drugbank_user: str
+    drugbank_passwd: str
+    disease_node_fields: Union[list[DiseaseNodeField], None] = None
+    gene_disease_edge_fields: Union[list[GENE_TO_DISEASE_INTERACTION_FIELD], None] = None
+    disease_drug_edge_fields: Union[list[DISEASE_TO_DRUG_INTERACTION_FIELD], None] = None
+    disease_disease_edge_fields: Union[list[DISEASE_TO_DISEASE_INTERACTION_FIELD], None] = None
+    add_prefix: bool = True
+    test_mode: bool = False
+    export_csv: bool = False
+    output_dir: DirectoryPath | None = None
+
 
 class Disease:
     """
@@ -107,45 +119,59 @@ class Disease:
                 gene_disease_edge_fields: Union[list[GENE_TO_DISEASE_INTERACTION_FIELD], None] = None,
                 disease_drug_edge_fields: Union[list[DISEASE_TO_DRUG_INTERACTION_FIELD], None] = None,
                 disease_disease_edge_fields: Union[list[DISEASE_TO_DISEASE_INTERACTION_FIELD], None] = None,
-                add_prefix = True,
-                test_mode = False):
+                add_prefix: bool = True,
+                test_mode: bool = False,
+                export_csv: bool = False,
+                output_dir: DirectoryPath | None = None):
         
         """
         Args:
             drugbank_user: drugbank username
             drugbank_passwd: drugbank password
-            disease_node_fields: disease node fields that will be included in graph, if defined it must be values of elements from DiseaseNodeField enum class
-            gene_disease_edge_fields: Gene-Disease edge fields that will be included in graph, if defined it must be values of elements from GENE_TO_DISEASE_INTERACTION_FIELD enum class
-            disease_drug_edge_fields: Disease-Drug edge fields that will be included in graph, if defined it must be values of elements from DISEASE_TO_DRUG_INTERACTION_FIELD enum class
-            disease_disease_edge_fields: Disease-Disease edge fields that will be included in graph, if defined it must be values of elements from DISEASE_TO_DISEASE_INTERACTION_FIELD enum class
+            disease_node_fields: disease node fields that will be included in graph, if defined it must be values of elements from DiseaseNodeField enum class (not the names)
+            gene_disease_edge_fields: Gene-Disease edge fields that will be included in graph, if defined it must be values of elements from GENE_TO_DISEASE_INTERACTION_FIELD enum class (not the names)
+            disease_drug_edge_fields: Disease-Drug edge fields that will be included in graph, if defined it must be values of elements from DISEASE_TO_DRUG_INTERACTION_FIELD enum class (not the names)
+            disease_disease_edge_fields: Disease-Disease edge fields that will be included in graph, if defined it must be values of elements from DISEASE_TO_DISEASE_INTERACTION_FIELD enum class (not the names)
             edge_types: list of edge types that will be included in graph, if defined it must be elements (not values of elements) from DiseaseEdgeType enum class
             add_prefix: if True, add prefix to database identifiers
             test_mode: if True, limits amount of output data
+            export_csv: if True, export data as csv
+            output_dir: Location of csv export if `export_csv` is True, if not defined it will be current directory
         """
-        self.drugbank_user = drugbank_user
-        self.drugbank_passwd = drugbank_passwd
-        self.add_prefix = add_prefix
+        model = DiseaseModel(drugbank_user=drugbank_user, drugbank_passwd=drugbank_passwd,
+                             disease_node_fields=disease_node_fields, edge_types=edge_types,
+                             gene_disease_edge_fields=gene_disease_edge_fields,
+                             disease_drug_edge_fields=disease_drug_edge_fields,
+                             disease_disease_edge_fields=disease_disease_edge_fields,
+                             add_prefix=add_prefix, test_mode=test_mode,
+                             export_csv=export_csv, output_dir=output_dir)
+        
+        self.drugbank_user = model["drugbank_user"]
+        self.drugbank_passwd = model["drugbank_passwd"]
+        self.add_prefix = model["add_prefix"]
+        self.export_csv =model["export_csv"]
+        self.output_dir = model["output_dir"]
         
         # set edge types
-        self.set_edge_types(edge_types=edge_types)
+        self.set_edge_types(edge_types=model["edge_types"])
 
         # set node and edge field
-        self.set_node_and_edge_fields(disease_node_fields=disease_node_fields,
-                                      gene_disease_edge_fields=gene_disease_edge_fields,
-                                      disease_drug_edge_fields=disease_drug_edge_fields,
-                                      disease_disease_edge_fields=disease_disease_edge_fields)
+        self.set_node_and_edge_fields(disease_node_fields=model["disease_node_fields"],
+                                      gene_disease_edge_fields=model["gene_disease_edge_fields"],
+                                      disease_drug_edge_fields=model["disease_drug_edge_fields"],
+                                      disease_disease_edge_fields=model["disease_disease_edge_fields"])
         
         # set early_stopping, if test_mode true
         self.early_stopping = None
-        if test_mode:
+        if model["test_mode"]:
             self.early_stopping = 100
          
-    
+    @validate_call
     def download_disease_data(
         self,
-        cache=False,
-        debug=False,
-        retries=3,
+        cache: bool = False,
+        debug: bool = False,
+        retries: int = 3,
     ):
         """
         Wrapper function to download disease data from various databases using pypath.
@@ -184,7 +210,7 @@ class Disease:
             logger.info(f'All data is downloaded in {round((t1-t0) / 60, 2)} mins'.upper())
             
             
-    def download_mondo_data(self):
+    def download_mondo_data(self) -> None:
         fields = ["is_obsolete"]
         if DiseaseNodeField.SYNONYMS.value in self.disease_node_fields:
             fields.append("obo_synonym")
@@ -212,7 +238,7 @@ class Disease:
             logger.info(f"Mondo hierarchical relations data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
             
-    def download_pathophenodb_data(self):
+    def download_pathophenodb_data(self) -> None:
         if DiseaseEdgeType.ORGANISM_TO_DISEASE in self.edge_types:
             t0 = time()
 
@@ -221,7 +247,7 @@ class Disease:
             t1 = time()
             logger.info(f"PathophenoDB organism-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
-    def download_ctd_data(self):
+    def download_ctd_data(self) -> None:
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
             
@@ -243,7 +269,7 @@ class Disease:
             t1 = time()
             logger.info(f"CTD chemical-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
-    def download_chembl_data(self):
+    def download_chembl_data(self) -> None:
         if DiseaseEdgeType.DISEASE_TO_DRUG in self.edge_types:
             t0 = time()
             
@@ -255,7 +281,7 @@ class Disease:
             logger.info(f"CHEMBL drug indication data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
             
-    def download_kegg_data(self):
+    def download_kegg_data(self) -> None:
         if DiseaseEdgeType.DISEASE_TO_DRUG in self.edge_types:
             t0 = time()
             
@@ -298,7 +324,7 @@ class Disease:
             t1 = time()
             logger.info(f"KEGG gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
-    def download_opentargets_data(self):
+    def download_opentargets_data(self) -> None:
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
             
@@ -315,7 +341,7 @@ class Disease:
             t1 = time()
             logger.info(f"Open Targets direct gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
-    def download_diseases_data(self):
+    def download_diseases_data(self) -> None:
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
             
@@ -338,7 +364,7 @@ class Disease:
             t1 = time()
             logger.info(f"DISEASES gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
-    def download_clinvar_data(self):
+    def download_clinvar_data(self) -> None:
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
             
@@ -350,7 +376,7 @@ class Disease:
             t1 = time()
             logger.info(f"Clinvar variant-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
-    def download_humsavar_data(self):
+    def download_humsavar_data(self) -> None:
         if DiseaseEdgeType.GENE_TO_DISEASE in self.edge_types:
             t0 = time()
             
@@ -363,7 +389,7 @@ class Disease:
             t1 = time()
             logger.info(f"Humsavar variant-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
             
-    def download_disgenet_data(self, from_csv = False):
+    def download_disgenet_data(self, from_csv = False) -> None:
         if from_csv:
             if not hasattr(self, "disgenet_id_mappings_dict"):
                 self.prepare_disgenet_id_mappings()
@@ -446,7 +472,7 @@ class Disease:
             t1 = time()
             logger.info(f"Disgenet gene-disease interaction data is downloaded in {round((t1-t0) / 60, 2)} mins")
                     
-    def download_malacards_data(self):
+    def download_malacards_data(self) -> None:
         
         if DiseaseEdgeType.DISEASE_COMOBORDITIY in self.edge_types:
             t0 = time()
@@ -469,7 +495,10 @@ class Disease:
             t1 = time()
             logger.info(f"Malacards disease comorbidity data is downloaded in {round((t1-t0) / 60, 2)} mins")
     
-    def prepare_mappings(self):
+    def prepare_mappings(self) -> None:
+        """
+        Prepare disease database identifier mappings from MONDO to other disease databases
+        """
         self.mondo_mappings = collections.defaultdict(dict)
         mapping_db_list = ["UMLS", "DOID", "MESH", "OMIM", "EFO", "Orphanet", "HP", "ICD10CM", "NCIT"]        
         
@@ -485,6 +514,9 @@ class Disease:
                         
                         
     def prepare_disgenet_id_mappings(self):
+        """
+        Prepare disgenet id mappings
+        """
         
         disgenet_id_mappings = disgenet.disease_id_mappings()
                 
@@ -528,7 +560,7 @@ class Disease:
                             self.malacards_id_to_mondo_id[entry["McId"]] = self.mondo_mappings[db].get(malacards_external_id)
                             break
                         
-    def process_ctd_chemical_disease(self):     
+    def process_ctd_chemical_disease(self) -> pd.DataFrame:     
         
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
@@ -568,7 +600,7 @@ class Disease:
         
         return df
     
-    def process_chembl_drug_indication(self):        
+    def process_chembl_drug_indication(self) -> pd.DataFrame:        
         
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
@@ -605,7 +637,7 @@ class Disease:
         
         return df
     
-    def process_kegg_drug_indication(self):
+    def process_kegg_drug_indication(self) -> pd.DataFrame:
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
         if not hasattr(self, "kegg_drug_disease"):
@@ -653,7 +685,7 @@ class Disease:
 
         return df
     
-    def process_opentargets_gene_disease(self):
+    def process_opentargets_gene_disease(self) -> pd.DataFrame:
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
         if not hasattr(self, "opentargets_direct"):
@@ -688,7 +720,7 @@ class Disease:
 
         return df
         
-    def process_diseases_gene_disease(self):
+    def process_diseases_gene_disease(self) -> pd.DataFrame:
 
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
@@ -733,7 +765,7 @@ class Disease:
 
         return diseases_knowledge_df, diseases_experimental_df
     
-    def process_clinvar_gene_disease(self):
+    def process_clinvar_gene_disease(self) -> pd.DataFrame:
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
         if not hasattr(self, "clinvar_variant_disease"):
@@ -808,7 +840,7 @@ class Disease:
         
         return df
     
-    def process_humsavar_gene_disease(self):
+    def process_humsavar_gene_disease(self) -> pd.DataFrame:
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
         if not hasattr(self, "humsavar_data"):
@@ -837,7 +869,7 @@ class Disease:
         
         return df
     
-    def process_kegg_gene_disease(self):
+    def process_kegg_gene_disease(self) -> pd.DataFrame:
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
         if not hasattr(self, "kegg_gene_disease"):
@@ -883,7 +915,7 @@ class Disease:
         
         return df
     
-    def process_disgenet_gene_disease(self, from_csv = False):
+    def process_disgenet_gene_disease(self, from_csv = False) -> pd.DataFrame:
         
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
@@ -985,7 +1017,7 @@ class Disease:
             
             return disgenet_gda_df, disgenet_vda_df
             
-    def process_disgenet_disease_disease(self, from_csv = False):
+    def process_disgenet_disease_disease(self, from_csv = False) -> pd.DataFrame:
         
         if not hasattr(self, "mondo_mappings"):
             self.prepare_mappings()
@@ -1092,7 +1124,7 @@ class Disease:
             
             return disgenet_dda_gene_df, disgenet_dda_variant_df
         
-    def process_malacards_disease_comorbidity(self):
+    def process_malacards_disease_comorbidity(self) -> pd.DataFrame:
         if not hasattr(self, "disease_comorbidity"):
             self.download_malacards_data()
             
@@ -1117,6 +1149,17 @@ class Disease:
         t1 = time()
         logger.info(f"Malacards disease comorbidity data is processed in {round((t1-t0) / 60, 2)} mins")
         
+        # write disease-disease comorbidity edge data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Disease_to_disease_comorbidity_edge.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Disease_to_disease_comorbidity_edge.csv")
+
+            comorbidity_df.to_csv(full_path, index=False)
+            logger.info(f"Disease-Disease comorbidity edge data is written: {full_path}")
+        
+
         return comorbidity_df
             
     def merge_disease_drug_edge_data(self) -> pd.DataFrame:
@@ -1148,10 +1191,20 @@ class Disease:
         
         t1 = time()
         logger.info(f"Disease-drug edge data is merged in {round((t1-t0) / 60, 2)} mins")
-        
+
+        # write disease-drug edge data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Disease_to_drug_edge.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Disease_to_drug_edge.csv")
+
+            merged_df.to_csv(full_path, index=False)
+            logger.info(f"Disease-Drug edge data is written: {full_path}")
+
         return merged_df
     
-    def merge_gene_disease_edge_data(self):
+    def merge_gene_disease_edge_data(self) -> pd.DataFrame:
         
         opentargets_df = self.process_opentargets_gene_disease()
         
@@ -1256,10 +1309,20 @@ class Disease:
         
         t1 = time()
         logger.info(f"Gene-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
+
+        # write gene-disease edge data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Gene_to_disease_edge.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Gene_to_disease_edge.csv")
+
+            merged_df.to_csv(full_path, index=False)
+            logger.info(f"Gene-Disease edge data is written: {full_path}")
         
         return merged_df
     
-    def merge_disease_disease_edge_data(self):
+    def merge_disease_disease_edge_data(self) -> pd.DataFrame:
         disgenet_dda_gene_df, disgenet_dda_variant_df = self.process_disgenet_disease_disease()
         
         logger.debug("Started merging disease-disease data")
@@ -1275,10 +1338,21 @@ class Disease:
         
         t1 = time()
         logger.info(f"Disease-disease edge data is merged in {round((t1-t0) / 60, 2)} mins")
+
+        # write disease-disease association edge data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Disease_to_disease_association_edge.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Disease_to_disease_association_edge.csv")
+
+            merged_df.to_csv(full_path, index=False)
+            logger.info(f"Disease-Disease association edge data is written: {full_path}")
         
-        return merged_df       
-        
-    def get_nodes(self, label="disease") -> list:
+        return merged_df
+          
+    @validate_call
+    def get_nodes(self, label: str = "disease") -> list[tuple]:
         if not hasattr(self, "mondo"):
             self.download_mondo_data()            
             
@@ -1313,10 +1387,27 @@ class Disease:
 
                 if self.early_stopping and index == self.early_stopping:
                     break
-                
-        return node_list
         
-    def get_mondo_hiererchical_edges(self, label="disease_is_a_disease") -> list:
+        # write node data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Disease.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Disease.csv")
+
+            df_list = []
+            for _id, _, props in node_list:
+                row = {"disease_id":_id} | props
+                df_list.append(row)
+            
+            df = pd.DataFrame.from_records(df_list)
+            df.to_csv(full_path, index=False)
+            logger.info(f"Disease node data is written: {full_path}")
+            
+        return node_list
+    
+    @validate_call
+    def get_mondo_hiererchical_edges(self, label: str = "disease_is_a_disease") -> list[tuple]:
         if not hasattr(self, "mondo_hierarchical_relations"):
             self.download_mondo_data()
             
@@ -1336,9 +1427,25 @@ class Disease:
             if self.early_stopping and counter >= self.early_stopping:
                 break
 
+        # write hiererchical edge data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Disease_hiererchical_edges.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Disease_hiererchical_edges.csv")
+
+            df_list = []
+            for _, child, parent, label, _ in edge_list:
+                df_list.append({"child_id":child, "parent_id":parent, "label":label})
+
+            df = pd.DataFrame.from_dict(df_list)
+            df.to_csv(df, index=False)
+            logger.info(f"Mondo hiererchical edge data is written: {full_path}")
+
         return edge_list
-        
-    def get_organism_disease_edges(self, label="organism_causes_disease") -> list:
+    
+    @validate_call
+    def get_organism_disease_edges(self, label: str = "organism_causes_disease") -> list[tuple]:
         
         if not hasattr(self, "pathopheno_organism_disease_int"):
             self.download_pathophenodb_data()
@@ -1360,10 +1467,26 @@ class Disease:
 
             if self.early_stopping and index == self.early_stopping:
                 break
-                    
+        
+        # write hiererchical edge data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Organism_to_disease_edge.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Organism_to_disease_edge.csv")
+
+            df_list = []
+            for _, organism, disease, label, _ in edge_list:
+                df_list.append({"organism_id":organism, "disease_id":disease, "label":label})
+
+            df = pd.DataFrame.from_dict(df_list)
+            df.to_csv(df, index=False)
+            logger.info(f"Organism-Disease edge data is written: {full_path}")
+
         return edge_list
     
-    def get_disease_drug_edges(self, label="disease_is_treated_by_drug"):
+    @validate_call
+    def get_disease_drug_edges(self, label: str = "disease_is_treated_by_drug") -> list[tuple]:
         
         disease_drug_edges_df = self.merge_disease_drug_edge_data()
         
@@ -1392,8 +1515,9 @@ class Disease:
                 break          
         
         return edge_list
-        
-    def get_gene_disease_edges(self, label="gene_is_related_to_disease"):
+    
+    @validate_call
+    def get_gene_disease_edges(self, label: str = "gene_is_related_to_disease") -> list[tuple]:
         
         gene_disease_edges_df = self.merge_gene_disease_edge_data()
         
@@ -1426,7 +1550,8 @@ class Disease:
             
         return edge_list
     
-    def get_disease_disease_edges(self, label="disease_is_associated_with_disease"):
+    @validate_call
+    def get_disease_disease_edges(self, label: str = "disease_is_associated_with_disease") -> list[tuple]:
         disease_disease_edges_df = self.merge_disease_disease_edge_data()
         
         logger.debug("Started writing disease-disease edges")
@@ -1455,7 +1580,8 @@ class Disease:
         
         return edge_list
     
-    def get_disease_comorbidity_edges(self, label="disease_is_comorbid_with_disease"):
+    @validate_call
+    def get_disease_comorbidity_edges(self, label: str = "disease_is_comorbid_with_disease") -> list[tuple]:
         comorbidity_edges_df = self.process_malacards_disease_comorbidity()
         
         logger.debug("Started writing disease comorbidity edges")
@@ -1474,7 +1600,8 @@ class Disease:
             
         return edge_list
     
-    def add_prefix_to_id(self, prefix=None, identifier=None, sep=":") -> str:
+    @validate_call
+    def add_prefix_to_id(self, prefix: str = None, identifier: str = None, sep: str = ":") -> str:
         """
         Adds prefix to database id
         """
@@ -1526,7 +1653,7 @@ class Disease:
         else:
             return None
         
-    def ensembl_transcript_to_ensembl_gene(self, enst_ids):
+    def ensembl_transcript_to_ensembl_gene(self, enst_ids) -> str | None:
         enst_id_list = [e.split(" ")[0].split(".")[0] for e in enst_ids.split(";") if e]
         if enst_id_list:
             ensg_id_list = set([list(mapping.map_name(_id, "enst_biomart", "ensg_biomart"))[0] for _id in enst_id_list if mapping.map_name(_id, "enst_biomart", "ensg_biomart")])
@@ -1567,5 +1694,4 @@ class Disease:
             self.disease_disease_edge_fields = [field.value for field in disease_disease_edge_fields]
         else:
             self.disease_disease_edge_fields = [field.value for field in DISEASE_TO_DISEASE_INTERACTION_FIELD]
-
 
