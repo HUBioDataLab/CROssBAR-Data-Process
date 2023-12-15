@@ -40,7 +40,7 @@ class Pathway:
         else:
             self.kegg_organism = self.ensure_iterable(kegg_organism)
         
-        self.set_edge_types(edge_types=self.ensure_iterable(edge_types))
+        self.set_edge_types(edge_types=edge_types)
     
     def download_pathway_data(
         self,
@@ -79,16 +79,16 @@ class Pathway:
         print("Started downloading Reactome data")
         t0 = time()
         
-        self.reactome_pathways = reactome.reactome_data("pathways")
+        self.reactome_pathways = reactome.reactome_pathways()
         
         if PathwayEdgeType.REACTOME_HIERARCHICAL_RELATIONS in self.edge_types:            
-            self.reactome_hierarchial_relations = reactome.reactome_data("pathway_relations")
+            self.reactome_hierarchial_relations = reactome.reactome_pathway_relations()
         
         if PathwayEdgeType.PROTEIN_TO_PATHWAY in self.edge_types:            
-            self.reactome_uniprot_pathway = reactome.reactome_data("uniprot2all")
+            self.reactome_uniprot_pathway = reactome.reactome_uniprots()
             
         if PathwayEdgeType.DRUG_TO_PATHWAY in self.edge_types:
-            self.reactome_chebi_pathway = reactome.reactome_data("chebi2all")
+            self.reactome_chebi_pathway = reactome.reactome_chebis()
             self.chebi_to_drugbank = {list(v)[0]:k for k, v in unichem.unichem_mapping("drugbank", "chebi").items()}
         
         t1 = time()
@@ -112,7 +112,7 @@ class Pathway:
             for org in tqdm(self.kegg_organism):                
                 self.kegg_gene_to_pathway = self.kegg_gene_to_pathway | kegg_local.gene_to_pathway(org=org)
                 
-            self.kegg_to_uniprot = {v.strip(";").split(";")[0]:k for k, v in uniprot.uniprot_data("database(KEGG)", 9606, True).items()}
+            self.kegg_to_uniprot = {v.strip(";").split(";")[0]:k for k, v in uniprot.uniprot_data("xref_kegg", 9606, True).items()}
             
         if PathwayEdgeType.DRUG_TO_PATHWAY in self.edge_types:
             self.kegg_drug_to_pathway = kegg_local.drug_to_pathway()
@@ -147,7 +147,7 @@ class Pathway:
         t0 = time()
         
         if PathwayEdgeType.PATHWAY_TO_PATHWAY in self.edge_types:            
-            self.compath_pathway_pathway = compath.get_all_mappings(source_db=None, target_db=None)
+            self.compath_pathway_pathway = compath.compath_mappings(source_db=None, target_db=None)
         
         t1 = time()
         print(f"CTD data is downloaded in {round((t1-t0) / 60, 2)} mins")
@@ -523,15 +523,15 @@ class Pathway:
                 elif pp.relation == "equivalentTo":
                     label = "pathway_is_equivalent_to_pathway"
                     
-                if pp.id_1.startswith("R-"):
-                    pathway_id1 = self.add_prefix_to_id(prefix="reactome", identifier=pp.id_1)
+                if pp.pathway_id_1.startswith("R-"):
+                    pathway_id1 = self.add_prefix_to_id(prefix="reactome", identifier=pp.pathway_id_1)
                 else:
-                    pathway_id1 = self.add_prefix_to_id(prefix="kegg.pathway", identifier=pp.id_1)
+                    pathway_id1 = self.add_prefix_to_id(prefix="kegg.pathway", identifier=pp.pathway_id_1)
                     
-                if pp.id_2.startswith("R-"):
-                    pathway_id2 = self.add_prefix_to_id(prefix="reactome", identifier=pp.id_2)
+                if pp.pathway_id_2.startswith("R-"):
+                    pathway_id2 = self.add_prefix_to_id(prefix="reactome", identifier=pp.pathway_id_2)
                 else:
-                    pathway_id2 = self.add_prefix_to_id(prefix="kegg.pathway", identifier=pp.id_2)
+                    pathway_id2 = self.add_prefix_to_id(prefix="kegg.pathway", identifier=pp.pathway_id_2)
                     
                 edge_list.append((None, pathway_id1, pathway_id2, label, {}))
                 
