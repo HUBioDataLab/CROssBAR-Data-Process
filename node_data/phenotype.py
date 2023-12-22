@@ -28,6 +28,7 @@ class PhenotypeNodeField(Enum):
 class PhenotypeDiseaseEdgeField(Enum):
     PUBMED_IDS = "pubmed_ids"
     EVIDENCE = "evidence"
+    
 
 class PhenotypeEdgeType(Enum):
     PROTEIN_TO_PHENOTYPE = auto()
@@ -39,6 +40,7 @@ class HPOModel(BaseModel):
     phenotype_node_fields: Union[list[PhenotypeNodeField], None] = None
     phenotype_disease_edge_fields: Union[list[PhenotypeDiseaseEdgeField], None] = None
     edge_types: Union[list[PhenotypeEdgeType], None] = None
+    remove_selected_annotations: list = ["IEA"]
     add_prefix: bool = True
     test_mode: bool = False
     export_csv: bool = False
@@ -49,14 +51,27 @@ class HPO:
                  phenotype_node_fields: Union[list[PhenotypeNodeField], None] = None,
                  phenotype_disease_edge_fields: Union[list[PhenotypeDiseaseEdgeField], None] = None,
                  edge_types: Union[list[PhenotypeEdgeType], None] = None,
+                 remove_selected_annotations: list = ["IEA"],
                  add_prefix: bool = True,
                  test_mode: bool = False,
                  export_csv: bool = False,
-                 output_dir: DirectoryPath | None = None):  
+                 output_dir: DirectoryPath | None = None):
+        """
+        Args:
+            phenotype_node_fields: Phenotype node fields that will be included in graph, if defined it must be values of elements from PhenotypeNodeField enum class (not the names)
+            phenotype_disease_edge_fields: Phenotype-Disease edge fields that will included in grah, if defined it must be values of elements from PhenotypeDiseaseEdgeField enum class (not the names)
+            edge_types: list of edge types that will be included in graph, if defined it must be elements (not values of elements) from PhenotypeEdgeType enum class
+            remove_selected_annotations: removes selected annotations from phenotype-disease edges, by default it removes electronic annotations
+            add_prefix: if True, add prefix to database identifiers
+            test_mode: if True, limits amount of output data
+            export_csv: if True, export data as csv
+            output_dir: Location of csv export if `export_csv` is True, if not defined and `export_csv` is True, it will be current directory
+        """
     
         model = HPOModel(phenotype_node_fields=phenotype_node_fields,
                          phenotype_disease_edge_fields=phenotype_disease_edge_fields,
                          edge_types=edge_types,
+                         remove_selected_annotations=remove_selected_annotations,
                          add_prefix=add_prefix,
                          test_mode=test_mode,
                          export_csv=export_csv,
@@ -65,6 +80,7 @@ class HPO:
         self.add_prefix = model["add_prefix"]
         self.export_csv = model["export_csv"]
         self.output_dir = model["output_dir"]
+        self.remove_selected_annotations = model["remove_selected_annotations"]
 
         # set edge types
         self.set_edge_types(edge_types=model["edge_types"])
@@ -137,7 +153,7 @@ class HPO:
                 continue
                 
             for disease in diseases:
-                 if disease.omim.split(":")[0] == "OMIM" and self.mondo_mappings.get(disease.omim.split(":")[1]):
+                 if disease.evidence not in self.remove_selected_annotations and disease.omim.split(":")[0] == "OMIM" and self.mondo_mappings.get(disease.omim.split(":")[1]):
                         if disease.pmid:
                             if ";" in disease.pmid:
                                 pmid = "|".join([i.replace("PMID:", "") for i in disease.pmid.split(";")])
