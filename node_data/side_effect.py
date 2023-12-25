@@ -61,14 +61,14 @@ class SideEffect:
         drugbank_drug_names = self.drugbank_data.drugbank_drugs_full(fields = ["name"])
         self.drugbank_name_to_drugbank_id_dict = {i.name.lower():i.drugbank_id for i in drugbank_drug_names}
         
-        sider_drug = sider.sider_drug()
-        self.cid_to_sider_drug_name = {i.cid:i.drug_name for i in sider_drug}
+        sider_drug = sider.sider_drug_names()
+        self.cid_to_sider_drug_name = {k:list(v)[0] for k,v in sider_drug.items()}
         
-        sider_meddra_tsv = sider.sider_meddra_tsv()
+        sider_meddra_tsv = sider.sider_meddra_side_effects()
         self.umls_to_meddra_id = {i.cid:{"meddra_id":i.meddra_id, "name":i.side_effect_name} for i in sider_meddra_tsv}
         self.meddra_id_to_side_effect_name = {i.meddra_id:i.side_effect_name for i in sider_meddra_tsv}
         
-        self.sider_meddra_with_freq = sider.sider_meddra_with_freq()
+        self.sider_meddra_with_freq = sider.sider_side_effect_frequencies()
         
         t1 = time()
         print(f"Sider data is downloaded in {round((t1-t0) / 60, 2)} mins")
@@ -83,7 +83,7 @@ class SideEffect:
         drugbank_external_ids = self.drugbank_data.drugbank_external_ids_full()
         self.rxcui_to_drugbank = {v.get("RxCUI"):k for k, v in drugbank_external_ids.items() if v.get("RxCUI")}
         
-        self.offsides_data = offsides.offsides()
+        self.offsides_data = offsides.offsides_side_effects()
         
         t1 = time()
         print(f"OffSides data is downloaded in {round((t1-t0) / 60, 2)} mins")
@@ -92,15 +92,15 @@ class SideEffect:
         print("Started downloading ADReCS data")
         t0 = time()
         
-        adrecs_drug_information = adrecs.adrecs_drug_information()
-        self.adrecs_drug_id_to_drugbank_id = {dr.drug_id: dr.drugbank_id for dr in adrecs_drug_information if dr.drugbank_id}
+        adrecs_drug_information = adrecs.adrecs_drug_identifiers()
+        self.adrecs_drug_id_to_drugbank_id = {dr.badd: dr.drugbank for dr in adrecs_drug_information if dr.drugbank}
         
-        self.adrecs_terminology = adrecs.adrecs_terminology()
+        self.adrecs_terminology = adrecs.adrecs_adr_ontology()
         
-        self.adrecs_adr_id_to_adrecs_drug_id = {dr.adr_id: dr.drug_id for dr in adrecs.adrecs_drugs()}
-        self.adrecs_adr_id_to_meddra_id = {entry.adr_id:str(entry.meddra_code) for entry in self.adrecs_terminology}
+        self.adrecs_adr_id_to_adrecs_drug_id = {dr.adr_badd: dr.drug_badd for dr in adrecs.adrecs_drug_adr()}
+        self.adrecs_adr_id_to_meddra_id = {entry.badd:str(entry.meddra) for entry in self.adrecs_terminology}
         
-        self.adrecs_ontology = adrecs.adrecs_extract_child_parent_relationship()
+        self.adrecs_ontology = adrecs.adrecs_hierarchy()
         
         t1 = time()
         print(f"ADReCS data is downloaded in {round((t1-t0) / 60, 2)} mins")
@@ -113,12 +113,13 @@ class SideEffect:
         t0 = time()
         
         df_list = []
-        for interaction in self.sider_meddra_with_freq:
-            if self.drugbank_name_to_drugbank_id_dict.get(self.cid_to_sider_drug_name.get(interaction.cid)) and self.umls_to_meddra_id.get(interaction.umls_concept_id_on_MedDRA):
-                drugbank_id = self.drugbank_name_to_drugbank_id_dict.get(self.cid_to_sider_drug_name.get(interaction.cid))
-                meddra_id = self.umls_to_meddra_id[interaction.umls_concept_id_on_MedDRA]["meddra_id"]
-                
-                df_list.append((drugbank_id, meddra_id, interaction.frequency))
+        for cid, sider_with_freq in self.sider_meddra_with_freq.items():
+            for interaction in sider_with_freq:
+                if self.drugbank_name_to_drugbank_id_dict.get(self.cid_to_sider_drug_name.get(cid)) and self.umls_to_meddra_id.get(interaction.umls_concept_in_meddra):
+                    drugbank_id = self.drugbank_name_to_drugbank_id_dict.get(self.cid_to_sider_drug_name.get(cid))
+                    meddra_id = self.umls_to_meddra_id[interaction.umls_concept_in_meddra]["meddra_id"]
+                    
+                    df_list.append((drugbank_id, meddra_id, interaction.frequency))
                 
                 
         df = pd.DataFrame(df_list, columns=["drugbank_id", "meddra_id", "frequency"])
@@ -141,9 +142,9 @@ class SideEffect:
         
         df_list = []
         for interaction in self.offsides_data:
-            if self.rxcui_to_drugbank.get(interaction.drug_rxnorn_id) and interaction.condition_meddra_id.isnumeric():
-                df_list.append((self.rxcui_to_drugbank[interaction.drug_rxnorn_id], interaction.condition_meddra_id,
-                               round(float(interaction.PRR), 3),))
+            if self.rxcui_to_drugbank.get(interaction.drug_rxnorn) and interaction.condition_meddra.isnumeric():
+                df_list.append((self.rxcui_to_drugbank[interaction.drug_rxnorn], interaction.condition_meddra,
+                               round(float(interaction.prr), 3),))
                 
         df = pd.DataFrame(df_list, columns=["drugbank_id", "meddra_id", "proportional_reporting_ratio"])
         
@@ -165,9 +166,9 @@ class SideEffect:
         
         df_list = []
         for interaction in self.adrecs_terminology:
-            if self.adrecs_drug_id_to_drugbank_id.get(self.adrecs_adr_id_to_adrecs_drug_id.get(interaction.adr_id)):
-                drugbank_id = self.adrecs_drug_id_to_drugbank_id[self.adrecs_adr_id_to_adrecs_drug_id[interaction.adr_id]]
-                df_list.append((drugbank_id, str(interaction.meddra_code), ))
+            if self.adrecs_drug_id_to_drugbank_id.get(self.adrecs_adr_id_to_adrecs_drug_id.get(interaction.badd)):
+                drugbank_id = self.adrecs_drug_id_to_drugbank_id[self.adrecs_adr_id_to_adrecs_drug_id[interaction.badd]]
+                df_list.append((drugbank_id, str(interaction.meddra), ))
                 
         df = pd.DataFrame(df_list, columns=["drugbank_id", "meddra_id"])
         
@@ -209,29 +210,29 @@ class SideEffect:
     
     def get_nodes(self, label="side_effect"):
         if not hasattr(self, "meddra_id_to_side_effect_name"):
-            sider_meddra_tsv = sider.sider_meddra_tsv()
+            sider_meddra_tsv = sider.sider_meddra_side_effects()
             self.meddra_id_to_side_effect_name = {i.meddra_id:i.side_effect_name for i in sider_meddra_tsv}
             
         if not hasattr(self, "offsides_data"):
-            self.offsides_data = offsides.offsides()
-            
+            self.offsides_data = offsides.offsides_side_effects()
+        
         if not hasattr(self, "adrecs_terminology"):
-            self.adrecs_terminology = adrecs.adrecs_terminology()
+            self.adrecs_terminology = adrecs.adrecs_adr_ontology()
             
             
         for entry in self.offsides_data:
-            if entry.condition_meddra_id not in self.meddra_id_to_side_effect_name.keys() and entry.condition_meddra_id.isnumeric():
-                self.meddra_id_to_side_effect_name[entry.condition_meddra_id] = entry.condition_concept_name
+            if entry.condition_meddra not in self.meddra_id_to_side_effect_name.keys() and entry.condition_meddra.isnumeric():
+                self.meddra_id_to_side_effect_name[entry.condition_meddra] = entry.condition
           
         adr_synonyms_dict = {}
         for entry in self.adrecs_terminology:
-            if str(entry.meddra_code) not in self.meddra_id_to_side_effect_name.keys():
-                self.meddra_id_to_side_effect_name[str(entry.meddra_code)] = entry.adr_term
+            if str(entry.meddra) not in self.meddra_id_to_side_effect_name.keys():
+                self.meddra_id_to_side_effect_name[str(entry.meddra)] = entry.badd
                 
-            if entry.adr_synonyms:
-                adr_synonyms_dict[str(entry.meddra_code)] = list(entry.adr_synonyms)[0].replace("|", ",").replace("'","^") if len(entry.adr_synonyms) == 1 else [t.replace("|", ",").replace("'","^") for t in entry.adr_synonyms]
+            if entry.synonyms:
+                adr_synonyms_dict[str(entry.meddra)] = list(entry.synonyms)[0].replace("|", ",").replace("'","^") if len(entry.synonyms) == 1 else [t.replace("|", ",").replace("'","^") for t in entry.synonyms]
                 
-        print("Started writing side effect edges")
+        print("Started writing side effect nodes")
         
         node_list = []
         for meddra_term, condition_name in tqdm(self.meddra_id_to_side_effect_name.items()):
@@ -287,11 +288,13 @@ class SideEffect:
         if not hasattr(self, "adrecs_ontology"):
             self.download_adrecs_data()
            
+        print("Started writing side effect hierarchical edges")
+        
         edge_list = []
         for relation in tqdm(self.adrecs_ontology):
-            if self.adrecs_adr_id_to_meddra_id.get(relation.child_adr_id) and self.adrecs_adr_id_to_meddra_id.get(relation.parent_adr_id):
-                child_id = self.add_prefix_to_id(prefix="meddra", identifier=self.adrecs_adr_id_to_meddra_id[relation.child_adr_id])
-                parent_id = self.add_prefix_to_id(prefix="meddra", identifier=self.adrecs_adr_id_to_meddra_id[relation.parent_adr_id])
+            if self.adrecs_adr_id_to_meddra_id.get(relation.child.badd) and self.adrecs_adr_id_to_meddra_id.get(relation.parent.badd):
+                child_id = self.add_prefix_to_id(prefix="meddra", identifier=self.adrecs_adr_id_to_meddra_id[relation.child.badd])
+                parent_id = self.add_prefix_to_id(prefix="meddra", identifier=self.adrecs_adr_id_to_meddra_id[relation.parent.badd])
                 edge_list.append((None, child_id, parent_id, label, {}))
                 
         return edge_list 
