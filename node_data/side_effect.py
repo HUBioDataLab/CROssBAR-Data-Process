@@ -8,6 +8,7 @@ from contextlib import ExitStack
 from bioregistry import normalize_curie
 from tqdm import tqdm
 from time import time
+import os
 
 from enum import Enum, auto
 from typing import Union
@@ -16,6 +17,8 @@ import pandas as pd
 import numpy as np
 
 from biocypher._logger import logger
+
+from pydantic import BaseModel, DirectoryPath, validate_call
 
 logger.debug(f"Loading module {__name__}.")
 
@@ -32,29 +35,61 @@ class SideEffectEdgeType(Enum):
     DRUG_TO_SIDE_EFFECT = auto()
     SIDE_EFFECT_HIERARCHICAL_ASSOCIATION = auto()
 
+class SideEffectModel(BaseModel):
+    drugbank_user: str
+    drugbank_passwd: str
+    side_effect_node_fields: Union[list[SideEffectNodeField], None] = None
+    drug_side_effect_edge_fields: Union[list[DrugSideEffectEdgeField], None] = None
+    edge_types: Union[list[SideEffectEdgeType], None] = None
+    test_mode: bool = False
+    export_csv: bool = False
+    output_dir: DirectoryPath | None = None
+    add_prefix: bool = True
 
 
 class SideEffect:
-    def __init__(self, drugbank_user, 
+    def __init__(self, 
+                 drugbank_user, 
                  drugbank_passwd,
                  side_effect_node_fields: Union[list[SideEffectNodeField], None] = None,
                  drug_side_effect_edge_fields: Union[list[DrugSideEffectEdgeField], None] = None,
                  edge_types: Union[list[SideEffectEdgeType], None] = None,
-                 add_prefix=True):
-        self.drugbank_user = drugbank_user
-        self.drugbank_passwd = drugbank_passwd
+                 test_mode: bool = False,
+                 export_csv: bool = False,
+                 output_dir: DirectoryPath | None = None,
+                 add_prefix: bool = True):
+
+        model = SideEffectModel(drugbank_user=drugbank_user,
+                                drugbank_passwd=drugbank_passwd,
+                                side_effect_node_fields=side_effect_node_fields,
+                                drug_side_effect_edge_fields=drug_side_effect_edge_fields,
+                                edge_types=edge_types,
+                                test_mode=test_mode,
+                                export_csv=export_csv,
+                                output_dir=output_dir,
+                                add_prefix=add_prefix).model_dump()
         
-        self.add_prefix = add_prefix
+        self.drugbank_user = model["drugbank_user"]
+        self.drugbank_passwd = model["drugbank_passwd"]        
+        self.add_prefix = model["add_prefix"]
+        self.export_csv = model["export_csv"]
+        self.output_dir = model["output_dir"]
 
         # set node fields
-        self.set_node_fields(side_effect_node_fields=side_effect_node_fields)
+        self.set_node_fields(side_effect_node_fields=model["side_effect_node_fields"])
 
         # set edge fields
-        self.set_edge_fields(drug_side_effect_edge_fields=drug_side_effect_edge_fields)
+        self.set_edge_fields(drug_side_effect_edge_fields=model["drug_side_effect_edge_fields"])
 
         # set edge types
-        self.set_edge_types(edge_types=edge_types) 
-        
+        self.set_edge_types(edge_types=model["edge_types"])
+
+        # set early_stopping, if test_mode true
+        self.early_stopping = None
+        if model["test_mode"]:
+            self.early_stopping = 100
+    
+    @validate_call
     def download_side_effect_data(
         self,
         cache: bool = False,
@@ -244,9 +279,20 @@ class SideEffect:
         
         t1 = time()
         logger.info(f"Drug-side effect edge data is merged in {round((t1-t0) / 60, 2)} mins")
+
+        # write drug-side effect edge data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Drug_to_side_effect.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Drug_to_side_effect.csv")
+
+            merged_df.to_csv(full_path, index=False)
+            logger.info(f"Drug-side effect edge data data is written: {full_path}")
         
         return merged_df
     
+    @validate_call
     def get_nodes(self, label: str = "side_effect") -> list[tuple]:
         if not hasattr(self, "meddra_id_to_side_effect_name"):
             sider_meddra_tsv = sider.sider_meddra_side_effects()
@@ -274,7 +320,7 @@ class SideEffect:
         logger.info("Started writing side effect nodes")
         
         node_list = []
-        for meddra_term, condition_name in tqdm(self.meddra_id_to_side_effect_name.items()):
+        for index, (meddra_term, condition_name) in tqdm(enumerate(self.meddra_id_to_side_effect_name.items())):
             props = {}
 
             if "name" in self.side_effect_node_fields:
@@ -285,6 +331,26 @@ class SideEffect:
                 
             meddra_id = self.add_prefix_to_id(prefix="meddra", identifier=meddra_term)
             node_list.append((meddra_id, label, props))
+
+            if self.early_stopping and index+1 == self.early_stopping:
+                break
+
+        # write pathway node data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Side_effect.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Side_effect.csv")
+
+            df_list = []
+            for meddra_id, _, props in node_list:
+                row = {"meddra_id":meddra_id} | props
+                df_list.append(row)
+
+            df = pd.DataFrame.from_records(df_list)
+            df.to_csv(full_path, index=False)
+            logger.info(f"Side effect node data is written: {full_path}")
+
             
         return node_list
     
@@ -301,7 +367,8 @@ class SideEffect:
             edge_list.extend(self.get_adrecs_side_effect_hierarchical_edges())
         
         return edge_list
-            
+    
+    @validate_call
     def get_drug_side_effect_edges(self, label: str = "drug_has_side_effect") -> list[tuple]:
         drug_side_effect_edges_df = self.merge_drug_side_effect_data()
         
@@ -325,9 +392,13 @@ class SideEffect:
                         props[k] = v
             
             edge_list.append((None, drug_id, meddra_id, label, props))
+
+            if self.early_stopping and index+1 == self.early_stopping:
+                break
             
         return edge_list
     
+    @validate_call
     def get_adrecs_side_effect_hierarchical_edges(self, label: str = "side_effect_is_a_side_effect") -> list[tuple]:
         if not hasattr(self, "adrecs_ontology"):
             self.download_adrecs_data()
@@ -335,14 +406,35 @@ class SideEffect:
         logger.info("Started writing side effect hierarchical edges")
         
         edge_list = []
-        for relation in tqdm(self.adrecs_ontology):
+        for index, relation in tqdm(enumerate(self.adrecs_ontology)):
             if self.adrecs_adr_id_to_meddra_id.get(relation.child.badd) and self.adrecs_adr_id_to_meddra_id.get(relation.parent.badd):
                 child_id = self.add_prefix_to_id(prefix="meddra", identifier=self.adrecs_adr_id_to_meddra_id[relation.child.badd])
                 parent_id = self.add_prefix_to_id(prefix="meddra", identifier=self.adrecs_adr_id_to_meddra_id[relation.parent.badd])
+                
                 edge_list.append((None, child_id, parent_id, label, {}))
+
+                if self.early_stopping and index+1 == self.early_stopping:
+                    break
+
+        # write side effect hierarchical edge data to csv
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "Side_effect_hierarchy.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "Side_effect_hierarchy.csv")
+
+            df_list = []
+            for _, child_id, parent_id, label, _ in edge_list:
+                df_list.append({"child_id":child_id, "parent_id":parent_id, "label":label})
+
+            df = pd.DataFrame.from_records(df_list)
+            df.to_csv(full_path, index=False)
+            logger.info(f"Side effect hierarchy edge data is written: {full_path}")
+
                 
         return edge_list 
-        
+    
+    @validate_call
     def add_prefix_to_id(self, prefix: str = None, identifier: str = None, sep: str = ":") -> str:
         """
         Adds prefix to database id
