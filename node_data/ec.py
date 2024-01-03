@@ -40,9 +40,9 @@ class EC:
             print("Started downloading Expasy EC number data")
             t0 = time()
             
-            self.enzymes = expasy.enzymes()
+            self.enzymes = expasy.expasy_enzymes()
             
-            self.enzyme_classes = expasy.enzyme_classes()
+            self.enzyme_classes = expasy.expasy_enzyme_classes()
             
             t1 = time()
             print(f"Expasy EC number data is downloaded in {round((t1-t0) / 60, 2)} mins")
@@ -74,7 +74,7 @@ class EC:
                                 for level_4_entry in level_3_dict["entries"]:
                                     level_4_id = self.add_prefix_to_id(prefix="eccode", identifier=level_4_entry)
                                     node_list.append((level_4_id, label,
-                                                      {"name":self.enzymes[level_4_entry]["name"][0].replace(".","").replace("|",",").replace("'","^")},))
+                                                      {"name":self.enzymes[level_4_entry]['de'].replace(".","").replace("|",",").replace("'","^")},))
                                     
         return node_list
     
@@ -125,8 +125,8 @@ class EC:
         
         edge_list = []
         for ec_number, ec_number_items in tqdm(self.enzymes.items()):
-            if ec_number_items.get("annotations"):
-                for protein in ec_number_items["annotations"]:
+            if ec_number_items.get("uniprots"):
+                for protein in ec_number_items["uniprots"]:
                     if protein in self.swissprots:
                         protein_id = self.add_prefix_to_id(prefix="uniprot", identifier=protein)
                         ec_id = self.add_prefix_to_id(prefix="eccode", identifier=ec_number)
@@ -135,30 +135,37 @@ class EC:
         return edge_list                        
             
     def prepare_ec_hierarchy_dict(self):
-        splitted = str(self.enzyme_classes).split("\n")
         
         self.ec_dict = {}
 
-        for entry in splitted:
-            if entry:        
-                if "\t" in entry and entry.count("\t") == 1:
-                    level_2_entry = level_1_entry.split(".")[0] + "." + entry.replace("\t", "").split(":")[0].strip() + ".-.-"
-                    level_2_name = entry.replace("\t", "").split(":")[1].strip()
-                    self.ec_dict[level_1_entry][level_2_entry] = {"name":level_2_name}
-                elif "\t" in entry and entry.count("\t") == 2:
-                    level_3_entry = ".".join(level_2_entry.split(".")[:2]) + "." + entry.replace("\t", "").split(":")[0].strip() + ".-"
-                    level_3_name = entry.replace("\t", "").split(":")[1].strip()
-                    search = ".".join(level_2_entry.split(".")[:2]) + "." + entry.replace("\t", "").split(":")[0].strip()
-                    self.ec_dict[level_1_entry][level_2_entry][level_3_entry] = {"name":level_3_name, "entries":[]}
-
-                    for level_4 in self.enzymes.keys():
-                        if (not self.enzymes[level_4]["name"][0].startswith("Transferred entry") and search == ".".join(level_4.split(".")[:3]))\
-                        and (not self.enzymes[level_4]["name"][0].startswith("Deleted") and search == ".".join(level_4.split(".")[:3])):
-                            self.ec_dict[level_1_entry][level_2_entry][level_3_entry]["entries"].append(level_4)
-                else:
-                    level_1_entry = entry.split(":")[0].strip() + ".-.-.-"
-                    level_1_name = entry.split(":")[1].strip()
-                    self.ec_dict[level_1_entry] = {"name":level_1_name}
+        for entry, name in self.enzyme_classes:
+            entry = entry.replace(" ", "")
+            
+            # if there is 3 - in the entry, it is a level 1 entry
+            if entry.count("-") == 3:
+                self.ec_dict[entry] = {"name":name}
+            # if there is 2 - in the entry, it is a level 2 entry
+            elif entry.count("-") == 2:
+                level_1_entry = entry.split(".")[0] + ".-.-.-"
+                if level_1_entry not in self.ec_dict:
+                    self.ec_dict[level_1_entry] = {}
+                self.ec_dict[level_1_entry][entry] = {"name":name}
+            # if there is 1 - in the entry, it is a level 3 entry
+            elif entry.count("-") == 1:
+                level_1_entry = entry.split(".")[0] + ".-.-.-"
+                level_2_entry = level_1_entry.split(".")[0] + "." + entry.split(".")[1] + ".-.-"
+                if level_1_entry not in self.ec_dict:
+                    self.ec_dict[level_1_entry] = {}
+                if level_2_entry not in self.ec_dict[level_1_entry]:
+                    self.ec_dict[level_1_entry][level_2_entry] = {}
+                self.ec_dict[level_1_entry][level_2_entry][entry] = {"name":name, 'entries':[]}
+        
+        for level_4 in self.enzymes.keys():
+            level_1_entry = level_4.split(".")[0] + ".-.-.-"
+            level_2_entry = level_1_entry.split(".")[0] + "." + level_4.split(".")[1] + ".-.-"
+            level_3_entry = level_2_entry.split(".")[0] + "." + level_4.split(".")[1] + "." + level_4.split(".")[2] + ".-"
+            if not self.enzymes[level_4]["de"].startswith("Transferred entry") and not self.enzymes[level_4]["de"].startswith("Deleted"):
+                self.ec_dict[level_1_entry][level_2_entry][level_3_entry]["entries"].append(level_4)
                     
     def add_prefix_to_id(self, prefix=None, identifier=None, sep=":") -> str:
         """
