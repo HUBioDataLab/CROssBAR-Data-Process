@@ -33,7 +33,6 @@ from typing import List, Union, NamedTuple, Dict, Tuple, Optional, Literal
 import pypath.share.curl as curl
 import pypath.share.session as session
 import pypath.resources.urls as urls
-import pypath.utils.mapping as mapping
 
 _logger = session.Logger(name="disgenet_input")
 _log = _logger._log
@@ -45,7 +44,11 @@ class DisgenetApi:
     _authenticated: bool = False
     _api_key: str = None
 
-    def authenticate(self) -> bool:
+    def __init__(self, e_mail, password):
+
+        self.authenticate(e_mail, password)
+        
+    def authenticate(self, e_mail, password) -> bool:
         """
         Starts an authorization process in DisGeNET API.
         Returns a boolean which is success of authentication.
@@ -55,8 +58,6 @@ class DisgenetApi:
             return True
 
         print(f"Authorizing in {self._name} API...")
-        e_mail: str = input("E-mail: ")
-        password: str = getpass("Password: ")
 
         url: str = f"{self._api_url}/auth/"
         post_params: dict[str, str] = {"email": e_mail, "password": password}
@@ -78,23 +79,7 @@ class DisgenetApi:
             self._authenticated = False
             self._api_key = None
 
-        return self._authenticated and (self._api_key != None)
-
-    def _if_authenticated(f):
-        """
-        Simple wrapper to get rid of the burden of
-        checking authentication status and authenticating
-        if already haven't.
-        """
-
-        def wrapper(self, *args, **kwargs):
-            if self.authenticate():
-                return f(self, *args, **kwargs)
-
-            else:
-                print("Failure in authorization, check your credentials.")
-
-        return wrapper
+        assert self._authenticated and (self._api_key != None)
 
     def _delete_cache(f):
         """
@@ -1972,7 +1957,7 @@ class DisgenetApi:
 
         return list_obj
 
-    @_if_authenticated
+    # @_if_authenticated
     @_delete_cache
     def _retrieve_data(
         self, url: str, get_params: Union[List[str], Dict[str, str]]
