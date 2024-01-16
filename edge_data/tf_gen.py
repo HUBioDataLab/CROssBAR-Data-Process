@@ -44,6 +44,16 @@ class TFGen:
 
             if not cache:
                 stack.enter_context(curl.cache_off())
+            
+            print('Started downloading TF-Gene data')
+            t0 = time()
+            
+            self.download_dorothea_data()
+            self.download_collectri_data()
+            self.download_trrust_data()
+            
+            t1 = time()
+            print(f"TF-Gene data is downloaded in {round((t1-t0) / 60, 2)} mins")
                 
     
     def download_dorothea_data(self):
@@ -63,7 +73,8 @@ class TFGen:
         
         self.collectri_interactions = list(collectri.collectri_interactions())
         
-        self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot.uniprot_data("database(GeneID)", self.organism, True).items()}
+        self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot.uniprot_data("xref_geneid", self.organism, True).items()}
+        
         
         t1 = time()
         print(f"CollecTRI data is downloaded in {round((t1-t0) / 60, 2)} mins")
@@ -79,7 +90,7 @@ class TFGen:
         self.trrust_interactions = trrust.trrust_human()        
         
         t1 = time()
-        print(f"CollecTRI data is downloaded in {round((t1-t0) / 60, 2)} mins")
+        print(f"TRRUST data is downloaded in {round((t1-t0) / 60, 2)} mins")
         
     def process_dorothea_tf_gene(self):
         
@@ -178,15 +189,17 @@ class TFGen:
         t0 = time()
         
         df_list = []
-        for tf, genes in self.trrust_interactions.items():
+        for interaction in self.trrust_interactions:
+            tf = interaction.source_genesymbol
+            target = interaction.target_genesymbol
+            effect = interaction.effect
             
             if self.trrust_gene_symbol_to_entrez_id.get(tf):
                 tf_entrez = self.trrust_gene_symbol_to_entrez_id[tf]
                 
-                for target in genes:
-                    if self.trrust_gene_symbol_to_entrez_id.get(target["gene_symbol"]):
-                        target_entrez = self.trrust_gene_symbol_to_entrez_id[target["gene_symbol"]]
-                        df_list.append((tf_entrez, target_entrez, target["effect"],))
+                if self.trrust_gene_symbol_to_entrez_id.get(target):
+                    target_entrez = self.trrust_gene_symbol_to_entrez_id[target]
+                    df_list.append((tf_entrez, target_entrez, effect,))
                         
         df = pd.DataFrame(df_list, columns=["tf", "target", "tf_effect"])
         
