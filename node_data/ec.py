@@ -118,7 +118,7 @@ class EC:
         for index, (level_1_entry, level_1_dict) in tqdm(enumerate(self.ec_dict.items())):
             level_1_id = self.add_prefix_to_id(prefix="eccode", identifier=level_1_entry)
             props = {}
-            if ECNodeField.NAME in self.ec_node_fields:
+            if ECNodeField.NAME.value in self.ec_node_fields:
                 props[ECNodeField.NAME.value] = level_1_dict["name"].replace("|",",").replace("'","^")
             
             node_list.append((level_1_id, label, props))
@@ -127,7 +127,7 @@ class EC:
                 if level_2_entry != "name":
                     level_2_id = self.add_prefix_to_id(prefix="eccode", identifier=level_2_entry)
                     props = {}
-                    if ECNodeField.NAME in self.ec_node_fields:
+                    if ECNodeField.NAME.value in self.ec_node_fields:
                         props[ECNodeField.NAME.value] = level_2_dict["name"].replace("|",",").replace("'","^")
 
                     node_list.append((level_2_id, label, props))
@@ -136,7 +136,7 @@ class EC:
                         if level_3_entry != "name":
                             level_3_id = self.add_prefix_to_id(prefix="eccode", identifier=level_3_entry)
                             props = {}
-                            if ECNodeField.NAME in self.ec_node_fields:
+                            if ECNodeField.NAME.value in self.ec_node_fields:
                                 props[ECNodeField.NAME.value] = level_3_dict["name"].replace("|",",").replace("'","^")
                             
                             node_list.append((level_3_id, label, props))
@@ -145,7 +145,7 @@ class EC:
                                 for level_4_entry in level_3_dict["entries"]:
                                     level_4_id = self.add_prefix_to_id(prefix="eccode", identifier=level_4_entry)
                                     props = {}
-                                    if ECNodeField.NAME in self.ec_node_fields:
+                                    if ECNodeField.NAME.value in self.ec_node_fields:
                                         props[ECNodeField.NAME.value] = self.enzymes[level_4_entry]['de'].replace(".","").replace("|",",").replace("'","^")
                                     
                                     node_list.append((level_4_id, label, props))
@@ -206,7 +206,7 @@ class EC:
                         if level_3_entry != "name":
                             level_3_id = self.add_prefix_to_id(prefix="eccode", identifier=level_3_entry)
                             
-                            edge_list.append((None, level_2_id, level_3_id, label, {}))
+                            edge_list.append((None, level_3_id, level_2_id, label, {}))
 
                             if level_3_dict["entries"]:                        
                                 for level_4_entry in level_3_dict["entries"]:
