@@ -5,28 +5,44 @@ from pypath.inputs import collectri, dorothea, trrust, uniprot
 import pypath.utils.mapping as mapping
 
 from contextlib import ExitStack
+from typing import Union, Literal
+from enum import Enum, IntEnum
+from biocypher._logger import logger
+from pydantic import BaseModel, DirectoryPath, validate_call
 
 from bioregistry import normalize_curie
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 from time import time
 
 import pandas as pd
 import numpy as np
 
+class TFGenEdgeField(Enum):
+    PUBMED_ID = "pubmed_id"
+    TF_EFFECT = "tf_effect"
+    DOROTHEA_CONFIDENCE_LEVEL = "dorothea_confidence_level"
+
+class OrganismField(IntEnum):
+    TAX_9606 = 9606
+    TAX_10090 = 10090
+
+
+
 class TFGen:
-    def __init__(self, organism=9606, add_prefix = True):
+    def __init__(self, organism: list[Literal[9606, 10090]] = [9606, 10090], add_prefix = True):
         self.organism = organism
         self.add_prefix = add_prefix
         
         
         self.effect_mapping = {0:"Unknown", 1:"Activation", -1:"Repression"}
     
+    @validate_call
     def download_tfgen_data(
         self,
-        cache=False,
-        debug=False,
-        retries=3,
-    ):
+        cache: bool = False,
+        debug: bool = False,
+        retries: int = 3,
+    ) -> None:
         """
         Wrapper function to download tf-gen relation data from various databases using pypath.
         Args
@@ -45,7 +61,7 @@ class TFGen:
             if not cache:
                 stack.enter_context(curl.cache_off())
             
-            print('Started downloading TF-Gene data')
+            logger.debug('Started downloading TF-Gene data')
             t0 = time()
             
             self.download_dorothea_data()
@@ -53,51 +69,54 @@ class TFGen:
             self.download_trrust_data()
             
             t1 = time()
-            print(f"TF-Gene data is downloaded in {round((t1-t0) / 60, 2)} mins")
+            logger.info(f"TF-Gene data is downloaded in {round((t1-t0) / 60, 2)} mins")
                 
     
-    def download_dorothea_data(self):
+    def download_dorothea_data(self) -> None:
         
-        print("Started downloading DoRothEA data")
+        logger.debug("Started downloading DoRothEA data")
         t0 = time()
         
-        # ONLY FOR HUMAN. LATER ADD MOUSE AS WELL
-        self.dorothea_interactions = list(dorothea.dorothea_interactions(organism = self.organism, levels={"A", "B", "C"}))
+        if 9606 in self.organism:
+            self.dorothea_interactions = list(dorothea.dorothea_interactions(organism = 9606, levels={"A", "B", "C"}))
         
         t1 = time()
-        print(f"DoRothEA data is downloaded in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"DoRothEA data is downloaded in {round((t1-t0) / 60, 2)} mins")
         
-    def download_collectri_data(self):
-        print("Started downloading CollecTRI data")
+    def download_collectri_data(self) -> None:
+        logger.debug("Started downloading CollecTRI data")
         t0 = time()
         
         self.collectri_interactions = list(collectri.collectri_interactions())
         
-        self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot.uniprot_data("xref_geneid", self.organism, True).items()}
+        self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot.uniprot_data("xref_geneid", 9606, True).items()}
         
         
         t1 = time()
-        print(f"CollecTRI data is downloaded in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"CollecTRI data is downloaded in {round((t1-t0) / 60, 2)} mins")
         
-    def download_trrust_data(self):
-        print("Started downloading TRRUST data")
+    def download_trrust_data(self) -> None:
+        logger.debug("Started downloading TRRUST data")
         t0 = time()
-        
-        # ONLY FOR HUMAN. LATER ADD MOUSE AS WELL
-        self.trrust_gene_symbol_to_entrez_id = {entry["gene_symbol"]:entry["entrez_id"] for entry in trrust.scrape_human()}
-        
-        # ONLY FOR HUMAN. LATER ADD MOUSE AS WELL
-        self.trrust_interactions = trrust.trrust_human()        
-        
+
+        self.trrust_interactions = []
+        self.trrust_gene_symbol_to_entrez_id = {}
+        if 9606 in self.organism:
+            self.trrust_gene_symbol_to_entrez_id = self.trrust_gene_symbol_to_entrez_id | {entry["gene_symbol"]:entry["entrez_id"] for entry in trrust.scrape_human()}
+            self.trrust_interactions.extend(trrust.trrust_human())
+        elif 10090 in self.organism:
+            self.trrust_gene_symbol_to_entrez_id = self.trrust_gene_symbol_to_entrez_id | {entry["gene_symbol"]:entry["entrez_id"] for entry in trrust.scrape_mouse()}
+            self.trrust_interactions.extend(trrust.trrust_mouse())
+
         t1 = time()
-        print(f"TRRUST data is downloaded in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"TRRUST data is downloaded in {round((t1-t0) / 60, 2)} mins")
         
-    def process_dorothea_tf_gene(self):
+    def process_dorothea_tf_gene(self) -> pd.DataFrame:
         
         if not hasattr(self, "dorothea_interactions"):
             self.download_dorothea_data()
             
-        print("Started processing DoRothEA tf-gen data")
+        logger.debug("Started processing DoRothEA tf-gen data")
         t0 = time()
         
         df_list = []
@@ -124,15 +143,15 @@ class TFGen:
         df["source"] = "DoRothEA"
         
         t1 = time()
-        print(f"DoRothEA tf-gen data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"DoRothEA tf-gen data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
-    def process_collectri_tf_gene(self):
+    def process_collectri_tf_gene(self) -> pd.DataFrame:
         if not hasattr(self, "collectri_interactions"):
             self.download_collectri_data()
             
-        print("Started processing CollecTRI tf-gen data")
+        logger.debug("Started processing CollecTRI tf-gen data")
         t0 = time()
         
         df_list = []
@@ -177,15 +196,15 @@ class TFGen:
         df["source"] = "CollecTRI"
         
         t1 = time()
-        print(f"CollecTRI tf-gen data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"CollecTRI tf-gen data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
-    def process_trrust_tf_gene(self):
+    def process_trrust_tf_gene(self) -> pd.DataFrame:
         if not hasattr(self, "trrust_interactions"):
             self.download_trrust_data()
             
-        print("Started processing TRRUST tf-gen data")
+        logger.debug("Started processing TRRUST tf-gen data")
         t0 = time()
         
         df_list = []
@@ -211,18 +230,18 @@ class TFGen:
         df["source"] = "TRRUST"
         
         t1 = time()
-        print(f"TRRUST tf-gen data is processed in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"TRRUST tf-gen data is processed in {round((t1-t0) / 60, 2)} mins")
         
         return df
     
-    def merge_tf_gen_data(self):
+    def merge_tf_gen_data(self) -> pd.DataFrame:
         trrust_df = self.process_trrust_tf_gene()
         
         dorothea_df = self.process_dorothea_tf_gene()
         
         collectri_df = self.process_collectri_tf_gene()
         
-        print("Started merging tf-gen edge data")
+        logger.debug("Started merging tf-gen edge data")
         t0 = time()
         
         # merge dorothea and collectri
@@ -256,15 +275,16 @@ class TFGen:
         merged_df.dropna(subset="tf_effect", inplace=True)
         
         t1 = time()
-        print(f"Tf-gene edge data is merged in {round((t1-t0) / 60, 2)} mins")
+        logger.info(f"Tf-gene edge data is merged in {round((t1-t0) / 60, 2)} mins")
         
         return merged_df
     
-    def get_edges(self, label="gene_regulates_gene"):
+    @validate_call
+    def get_edges(self, label: str = "gene_regulates_gene") -> list[tuple]:
         
         tf_gen_edges_df = self.merge_tf_gen_data()
         
-        print("Started writing tf-gen edges")
+        logger.info("Started writing tf-gen edges")
         
         edge_list = []
         for index, row in tqdm(tf_gen_edges_df.iterrows(), total=tf_gen_edges_df.shape[0]):
@@ -286,8 +306,9 @@ class TFGen:
             edge_list.append((None, tf_id, target_id, label, props))
             
         return edge_list            
-            
-    def add_prefix_to_id(self, prefix=None, identifier=None, sep=":") -> str:
+    
+    @validate_call
+    def add_prefix_to_id(self, prefix: str = None, identifier: str = None, sep: str =":") -> str:
         """
         Adds prefix to database id
         """
