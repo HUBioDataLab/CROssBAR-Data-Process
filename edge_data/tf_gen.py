@@ -142,7 +142,7 @@ class TFGen:
         if 9606 in self.organism:
             self.trrust_gene_symbol_to_entrez_id = self.trrust_gene_symbol_to_entrez_id | {entry["gene_symbol"]:entry["entrez_id"] for entry in trrust.scrape_human()}
             self.trrust_interactions.extend(trrust.trrust_human())
-        elif 10090 in self.organism:
+        if 10090 in self.organism:
             self.trrust_gene_symbol_to_entrez_id = self.trrust_gene_symbol_to_entrez_id | {entry["gene_symbol"]:entry["entrez_id"] for entry in trrust.scrape_mouse()}
             self.trrust_interactions.extend(trrust.trrust_mouse())
 
