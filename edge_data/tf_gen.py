@@ -10,6 +10,8 @@ from enum import Enum, IntEnum
 from biocypher._logger import logger
 from pydantic import BaseModel, DirectoryPath, validate_call
 
+import os
+
 from bioregistry import normalize_curie
 from tqdm import tqdm
 from time import time
@@ -26,15 +28,50 @@ class OrganismField(IntEnum):
     TAX_9606 = 9606
     TAX_10090 = 10090
 
+class TFGenModel(BaseModel):
+    edge_fields: Union[list[TFGenEdgeField], None] = None,
+    organism: Union[list[Literal[9606, 10090]], None] = [9606, 10090],
+    test_mode: bool = False,
+    export_csv: bool = False,
+    output_dir: DirectoryPath | None = None,
+    add_prefix = True
 
 
 class TFGen:
-    def __init__(self, organism: list[Literal[9606, 10090]] = [9606, 10090], add_prefix = True):
-        self.organism = organism
-        self.add_prefix = add_prefix
+    def __init__(self, 
+                 edge_fields: Union[list[TFGenEdgeField], None] = None,
+                 organism: Union[list[Literal[9606, 10090]], None] = [9606, 10090],
+                 test_mode: bool = False,
+                 export_csv: bool = False,
+                 output_dir: DirectoryPath | None = None,
+                 add_prefix = True):
+
+        model = TFGenModel(edge_fields=edge_fields,
+                           organism=organism,
+                           test_mode=test_mode,
+                           export_csv=export_csv,
+                           output_dir=output_dir,
+                           add_prefix=add_prefix).model_dump()
         
+        self.export_csv = model["export_csv"]
+        self.output_dir = model["output_dir"]
+        self.add_prefix = model["add_prefix"]
+
+
+        # set edge fields
+        self.set_edge_fields(edge_fields=model["edge_fields"])
+
+        # set organism
+        self.set_organism(organism=model["organism"])
         
+        # map numbers to corresponding tf effect
         self.effect_mapping = {0:"Unknown", 1:"Activation", -1:"Repression"}
+
+
+        # set early_stopping, if test_mode true
+        self.early_stopping = None
+        if model["test_mode"]:
+            self.early_stopping = 100
     
     @validate_call
     def download_tfgen_data(
@@ -87,9 +124,10 @@ class TFGen:
         logger.debug("Started downloading CollecTRI data")
         t0 = time()
         
-        self.collectri_interactions = list(collectri.collectri_interactions())
+        if 9606 in self.organism:
+            self.collectri_interactions = list(collectri.collectri_interactions())
         
-        self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot.uniprot_data("xref_geneid", 9606, True).items()}
+            self.uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot.uniprot_data("xref_geneid", 9606, True).items()}
         
         
         t1 = time()
@@ -276,6 +314,15 @@ class TFGen:
         
         t1 = time()
         logger.info(f"Tf-gene edge data is merged in {round((t1-t0) / 60, 2)} mins")
+
+        if self.export_csv:
+            if self.output_dir:
+                full_path = os.path.join(self.output_dir, "tf_gen_edges.csv")
+            else:
+                full_path = os.path.join(os.getcwd(), "tf_gen_edges.csv")
+
+            merged_df.to_csv(full_path, index=False)
+            logger.info(f"Tf-gen edge data is written: {full_path}")
         
         return merged_df
     
@@ -304,6 +351,9 @@ class TFGen:
                         props[k] = v
                         
             edge_list.append((None, tf_id, target_id, label, props))
+
+            if self.early_stopping and index+1 == self.early_stopping:
+                break
             
         return edge_list            
     
@@ -317,8 +367,8 @@ class TFGen:
         
         return identifier
         
-        
-    def map_gene_symbol_to_entrez_id(self, gene_symbol):
+    @validate_call
+    def map_gene_symbol_to_entrez_id(self, gene_symbol: str):
         return mapping.map_name(gene_symbol, "genesymbol", "entrez")
     
     def merge_source_column(self, element, joiner="|"):
@@ -347,4 +397,17 @@ class TFGen:
             _list.remove("Unknown")
             return _list[0]
         else:
-            np.nan
+            return np.nan
+        
+    def set_edge_fields(self, edge_fields):
+        if edge_fields:
+            self.edge_fields = edge_fields
+        else:
+            self.edge_fields = [field.value for field in TFGenEdgeField]
+    
+    def set_organism(self, organism):
+        if organism:
+            self.organism = organism
+        else:
+            self.organism = [field.value for field in OrganismField]
+
