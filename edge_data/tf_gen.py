@@ -344,7 +344,7 @@ class TFGen:
             
             props = {}
             for k, v in _dict.items():
-                if str(v) != "nan":
+                if k in self.edge_fields and str(v) != "nan":
                     if isinstance(v, str) and "|" in v:
                         props[k] = v.split("|")
                     else:
