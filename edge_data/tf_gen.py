@@ -116,7 +116,10 @@ class TFGen:
         
         if 9606 in self.organism:
             self.dorothea_interactions = list(dorothea.dorothea_interactions(organism = 9606, levels={"A", "B", "C"}))
-        
+
+            uniprot_to_gene_symbol = uniprot.uniprot_data("gene_primary", 9606, True)
+            uniprot_to_entrez = {k:v.strip(";").split(";")[0] for k,v in uniprot.uniprot_data("xref_geneid", 9606, True).items()}
+            self.gene_symbol_to_entrez = {uniprot_to_gene_symbol[uniprot_id]:entrez for uniprot_id, entrez in uniprot_to_entrez.items() if uniprot_to_gene_symbol.get(uniprot_id)}
         t1 = time()
         logger.info(f"DoRothEA data is downloaded in {round((t1-t0) / 60, 2)} mins")
         
@@ -159,18 +162,19 @@ class TFGen:
         
         df_list = []
         for interaction in self.dorothea_interactions:
-            tf = self.map_gene_symbol_to_entrez_id(interaction.tf)
-            target = self.map_gene_symbol_to_entrez_id(interaction.target)
+            tf = self.gene_symbol_to_entrez(interaction.tf)
+            target = self.gene_symbol_to_entrez(interaction.target)
             if tf and target:
-                tf = list(tf)[0]
-                target = list(target)[0]
-                effect = self.effect_mapping[interaction.effect]
                 
                 pubmed_id = None
                 if interaction.pubmed:
                     pubmed_id = interaction.pubmed
                     
-                df_list.append((tf, target, pubmed_id, effect, interaction.level))
+                df_list.append((tf, 
+                                target, 
+                                pubmed_id, 
+                                self.effect_mapping[interaction.effect], 
+                                interaction.level))
                 
         df = pd.DataFrame(df_list, columns=["tf", "target", "pubmed_id", "tf_effect", "dorothea_confidence_level"])
         
@@ -196,27 +200,27 @@ class TFGen:
         for interaction in self.collectri_interactions:
             if str(interaction.tf).startswith("COMPLEX"):
                 for tf in list(interaction.tf):
-                    if self.uniprot_to_entrez.get(interaction.tf) and self.uniprot_to_entrez.get(interaction.target):
-                        tf_entrez = self.uniprot_to_entrez[interaction.tf]
-                        target_entrez = self.uniprot_to_entrez[interaction.target]
-                        effect = self.effect_mapping[interaction.effect]
+                    if self.uniprot_to_entrez.get(str(tf)) and self.uniprot_to_entrez.get(str(interaction.target)):
                         
                         pubmed_id = None
                         if interaction.pubmed:
                             pubmed_id = interaction.pubmed.replace(";", "|")
                             
-                        df_list.append((tf_entrez, target_entrez, pubmed_id, effect))
+                        df_list.append((self.uniprot_to_entrez[tf], 
+                                        self.uniprot_to_entrez[interaction.target], 
+                                        pubmed_id, 
+                                        self.effect_mapping[interaction.effect]))
             else:
                 if self.uniprot_to_entrez.get(interaction.tf) and self.uniprot_to_entrez.get(interaction.target):
-                    tf_entrez = self.uniprot_to_entrez[interaction.tf]
-                    target_entrez = self.uniprot_to_entrez[interaction.target]
-                    effect = self.effect_mapping[interaction.effect]
                     
                     pubmed_id = None
                     if interaction.pubmed:                        
                         pubmed_id = interaction.pubmed.replace(";", "|")
                         
-                    df_list.append((tf_entrez, target_entrez, pubmed_id, effect))
+                    df_list.append((self.uniprot_to_entrez[interaction.tf], 
+                                    self.uniprot_to_entrez[interaction.target], 
+                                    pubmed_id, 
+                                    self.effect_mapping[interaction.effect]))
                     
                     
         df = pd.DataFrame(df_list, columns=["tf", "target", "pubmed_id", "tf_effect"])
@@ -247,16 +251,11 @@ class TFGen:
         
         df_list = []
         for interaction in self.trrust_interactions:
-            tf = interaction.source_genesymbol
-            target = interaction.target_genesymbol
-            effect = interaction.effect
             
-            if self.trrust_gene_symbol_to_entrez_id.get(tf):
-                tf_entrez = self.trrust_gene_symbol_to_entrez_id[tf]
-                
-                if self.trrust_gene_symbol_to_entrez_id.get(target):
-                    target_entrez = self.trrust_gene_symbol_to_entrez_id[target]
-                    df_list.append((tf_entrez, target_entrez, effect,))
+            if self.trrust_gene_symbol_to_entrez_id.get(interaction.source_genesymbol) and self.trrust_gene_symbol_to_entrez_id.get(interaction.target_genesymbol):
+                df_list.append((self.trrust_gene_symbol_to_entrez_id[interaction.source_genesymbol], 
+                                self.trrust_gene_symbol_to_entrez_id[interaction.target_genesymbol], 
+                                interaction.effect,))
                         
         df = pd.DataFrame(df_list, columns=["tf", "target", "tf_effect"])
         
@@ -366,10 +365,6 @@ class TFGen:
             return normalize_curie(prefix + sep + str(identifier))
         
         return identifier
-        
-    @validate_call
-    def map_gene_symbol_to_entrez_id(self, gene_symbol: str):
-        return mapping.map_name(gene_symbol, "genesymbol", "entrez")
     
     def merge_source_column(self, element, joiner="|"):
         
