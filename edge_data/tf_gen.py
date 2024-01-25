@@ -34,7 +34,7 @@ class TFGenModel(BaseModel):
     test_mode: bool = False,
     export_csv: bool = False,
     output_dir: DirectoryPath | None = None,
-    add_prefix = True
+    add_prefix: bool = True
 
 
 class TFGen:
@@ -44,7 +44,7 @@ class TFGen:
                  test_mode: bool = False,
                  export_csv: bool = False,
                  output_dir: DirectoryPath | None = None,
-                 add_prefix = True):
+                 add_prefix: bool = True):
 
         model = TFGenModel(edge_fields=edge_fields,
                            organism=organism,
